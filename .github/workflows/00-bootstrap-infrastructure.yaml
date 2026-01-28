@@ -213,24 +213,52 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup kubectl
-        run: |
-          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-          chmod +x kubectl
-          sudo mv kubectl /usr/local/bin/
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
 
       - name: Update kubeconfig for Hub Cluster
         run: |
-          aws eks update-kubeconfig --name argocd-usw2 --region ${{ env.AWS_REGION }}
+          # Configure kubeconfig for the ArgoCD hub cluster
+          aws eks update-kubeconfig --name argocd-usw2 --region ${{ env.AWS_REGION }} --alias argocd-hub
+
+          # Verify connection
+          kubectl config use-context argocd-hub
+          kubectl cluster-info
 
       - name: Apply ArgoCD Application
         run: |
+          echo "Applying ArgoCD Application for GitOps deployment..."
           kubectl apply -f .opsera-voting2/argocd/application.yaml
+
+          echo "ArgoCD Application created/updated:"
+          kubectl get application voting2-dev -n argocd -o wide
 
       - name: Wait for ArgoCD Sync
         run: |
-          echo "Waiting for ArgoCD to sync..."
-          sleep 30
-          kubectl get application voting2-dev -n argocd -o jsonpath='{.status.sync.status}'
+          echo "Waiting for ArgoCD to detect and sync the application..."
+
+          # Wait for sync status (max 5 minutes)
+          for i in {1..30}; do
+            SYNC_STATUS=$(kubectl get application voting2-dev -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+            HEALTH_STATUS=$(kubectl get application voting2-dev -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
+
+            echo "Attempt $i/30 - Sync: $SYNC_STATUS, Health: $HEALTH_STATUS"
+
+            if [ "$SYNC_STATUS" == "Synced" ]; then
+              echo "ArgoCD sync completed successfully!"
+              break
+            fi
+
+            sleep 10
+          done
+
+          # Print final status
+          echo ""
+          echo "## ArgoCD Application Status" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get application voting2-dev -n argocd -o yaml | head -50 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
   summary:
     name: "Deployment Summary"
