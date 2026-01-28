@@ -76,10 +76,10 @@ output "irsa_worker_role_arn" {
   value       = aws_iam_role.worker.arn
 }
 
-# GitHub Actions
+# GitHub Actions (created by bootstrap script, referenced as data source)
 output "github_actions_role_arn" {
   description = "IAM role ARN for GitHub Actions OIDC"
-  value       = aws_iam_role.github_actions.arn
+  value       = data.aws_iam_role.github_actions.arn
 }
 
 # VPC Info
@@ -125,6 +125,6 @@ output "deployment_summary" {
       result = aws_iam_role.result.arn
       worker = aws_iam_role.worker.arn
     }
-    github_actions_role = aws_iam_role.github_actions.arn
+    github_actions_role = data.aws_iam_role.github_actions.arn
   }
 }
