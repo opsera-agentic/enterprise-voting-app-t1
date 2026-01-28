@@ -15,11 +15,11 @@ patches:
 
 images:
   - name: PLACEHOLDER_VOTE_IMAGE
-    newName: PLACEHOLDER_ECR_VOTE
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/voting2-dev-vote
     newTag: latest
   - name: PLACEHOLDER_RESULT_IMAGE
-    newName: PLACEHOLDER_ECR_RESULT
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/voting2-dev-result
     newTag: latest
   - name: PLACEHOLDER_WORKER_IMAGE
-    newName: PLACEHOLDER_ECR_WORKER
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/voting2-dev-worker
     newTag: latest

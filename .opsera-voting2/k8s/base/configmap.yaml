@@ -7,11 +7,11 @@ metadata:
     app.kubernetes.io/part-of: voting2
 data:
   # Redis - ElastiCache endpoint (populated by bootstrap workflow)
-  REDIS_HOST: "PLACEHOLDER_REDIS_HOST"
+  REDIS_HOST: "voting2-dev-redis.2muj25.0001.usw2.cache.amazonaws.com"
   REDIS_PORT: "6379"
 
   # PostgreSQL - RDS endpoint (populated by bootstrap workflow)
   # No credentials stored - using IAM Authentication
-  DATABASE_HOST: "PLACEHOLDER_DATABASE_HOST"
+  DATABASE_HOST: "voting2-dev-postgres.chwgk42cofpp.us-west-2.rds.amazonaws.com"
   DATABASE_PORT: "5432"
   DATABASE_NAME: "votes"
