@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: voting2-dev
+  labels:
+    app.kubernetes.io/name: voting2
+    app.kubernetes.io/instance: voting2-dev
+    app.kubernetes.io/managed-by: argocd
+    environment: dev

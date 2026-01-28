@@ -1,0 +1,31 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: voting2-ingress
+spec:
+  tls:
+    - hosts:
+        - vote-voting2-dev.agent.opsera.dev
+        - result-voting2-dev.agent.opsera.dev
+      secretName: voting2-dev-tls
+  rules:
+    - host: vote-voting2-dev.agent.opsera.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vote
+                port:
+                  number: 80
+    - host: result-voting2-dev.agent.opsera.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: result
+                port:
+                  number: 80

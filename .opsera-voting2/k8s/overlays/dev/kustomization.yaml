@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: voting2-dev
+
+resources:
+  - ../../base
+
+commonLabels:
+  environment: dev
+
+patches:
+  - path: patch-replicas.yaml
+  - path: patch-ingress.yaml
+
+images:
+  - name: PLACEHOLDER_VOTE_IMAGE
+    newName: PLACEHOLDER_ECR_VOTE
+    newTag: latest
+  - name: PLACEHOLDER_RESULT_IMAGE
+    newName: PLACEHOLDER_ECR_RESULT
+    newTag: latest
+  - name: PLACEHOLDER_WORKER_IMAGE
+    newName: PLACEHOLDER_ECR_WORKER
+    newTag: latest

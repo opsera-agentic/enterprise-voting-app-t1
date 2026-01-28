@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: result
+  labels:
+    app: result
+    app.kubernetes.io/name: result
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: voting2
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: result
+  template:
+    metadata:
+      labels:
+        app: result
+        app.kubernetes.io/name: result
+    spec:
+      serviceAccountName: result
+      containers:
+        - name: result
+          image: PLACEHOLDER_RESULT_IMAGE
+          ports:
+            - containerPort: 80
+              protocol: TCP
+          env:
+            # Database connection info (no password - uses IAM auth)
+            - name: DATABASE_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: voting2-config
+                  key: DATABASE_HOST
+            - name: DATABASE_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: voting2-config
+                  key: DATABASE_PORT
+            - name: DATABASE_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: voting2-config
+                  key: DATABASE_NAME
+            - name: DATABASE_USER
+              value: "app_user"
+            # IAM Auth enabled flag
+            - name: DATABASE_USE_IAM_AUTH
+              value: "true"
+            - name: AWS_REGION
+              value: "us-west-2"
+            - name: PORT
+              value: "80"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 20
+            periodSeconds: 20

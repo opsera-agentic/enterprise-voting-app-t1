@@ -7,8 +7,10 @@
 
   <ItemGroup>
     <PackageReference Include="StackExchange.Redis" Version="2.2.4" />
-    <PackageReference Include="Npgsql" Version="4.1.9" />
+    <PackageReference Include="Npgsql" Version="8.0.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
+    <PackageReference Include="AWSSDK.RDS" Version="3.7.300" />
+    <PackageReference Include="AWSSDK.SecurityToken" Version="3.7.300" />
   </ItemGroup>
 
 </Project>

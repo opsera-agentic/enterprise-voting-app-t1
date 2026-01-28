@@ -4,9 +4,11 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Npgsql;
 using StackExchange.Redis;
+using Amazon.RDS.Util;
 
 namespace Worker
 {
@@ -16,40 +18,96 @@ namespace Worker
         {
             try
             {
-                var pgsql = OpenDbConnection("Server=db;Username=postgres;Password=postgres;");
-                var redisConn = OpenRedisConnection("redis");
+                // Configuration from environment variables
+                var dbHost = Environment.GetEnvironmentVariable("DATABASE_HOST") ?? "db";
+                var dbPort = int.Parse(Environment.GetEnvironmentVariable("DATABASE_PORT") ?? "5432");
+                var dbUser = Environment.GetEnvironmentVariable("DATABASE_USER") ?? "postgres";
+                var dbName = Environment.GetEnvironmentVariable("DATABASE_NAME") ?? "votes";
+                var useIamAuth = Environment.GetEnvironmentVariable("DATABASE_USE_IAM_AUTH") == "true";
+                var awsRegion = Environment.GetEnvironmentVariable("AWS_REGION") ?? "us-west-2";
+
+                var redisHost = Environment.GetEnvironmentVariable("REDIS_HOST") ?? "redis";
+                var redisPort = int.Parse(Environment.GetEnvironmentVariable("REDIS_PORT") ?? "6379");
+
+                // Build connection string
+                string dbConnectionString;
+                if (useIamAuth)
+                {
+                    // Generate IAM auth token
+                    var authToken = RDSAuthTokenGenerator.GenerateAuthToken(
+                        Amazon.RegionEndpoint.GetBySystemName(awsRegion),
+                        dbHost,
+                        dbPort,
+                        dbUser
+                    );
+                    Console.WriteLine($"Using IAM authentication for RDS: {dbHost}:{dbPort}");
+                    dbConnectionString = $"Server={dbHost};Port={dbPort};Username={dbUser};Password={authToken};Database={dbName};SSL Mode=Require;Trust Server Certificate=true";
+                }
+                else
+                {
+                    var dbPassword = Environment.GetEnvironmentVariable("DATABASE_PASSWORD") ?? "postgres";
+                    Console.WriteLine("Using password authentication for database");
+                    dbConnectionString = $"Server={dbHost};Port={dbPort};Username={dbUser};Password={dbPassword};Database={dbName}";
+                }
+
+                var pgsql = OpenDbConnection(dbConnectionString);
+                var redisConn = OpenRedisConnection(redisHost, redisPort);
                 var redis = redisConn.GetDatabase();
 
-                // Keep alive is not implemented in Npgsql yet. This workaround was recommended:
-                // https://github.com/npgsql/npgsql/issues/1214#issuecomment-235828359
+                // Keep alive is not implemented in Npgsql yet
                 var keepAliveCommand = pgsql.CreateCommand();
                 keepAliveCommand.CommandText = "SELECT 1";
 
                 var definition = new { vote = "", voter_id = "" };
+
+                // Track when we need to refresh the IAM token (every 10 minutes)
+                var lastTokenRefresh = DateTime.UtcNow;
+                var tokenRefreshInterval = TimeSpan.FromMinutes(10);
+
                 while (true)
                 {
-                    // Slow down to prevent CPU spike, only query each 100ms
                     Thread.Sleep(100);
 
                     // Reconnect redis if down
-                    if (redisConn == null || !redisConn.IsConnected) {
+                    if (redisConn == null || !redisConn.IsConnected)
+                    {
                         Console.WriteLine("Reconnecting Redis");
-                        redisConn = OpenRedisConnection("redis");
+                        redisConn = OpenRedisConnection(redisHost, redisPort);
                         redis = redisConn.GetDatabase();
                     }
+
                     string json = redis.ListLeftPopAsync("votes").Result;
                     if (json != null)
                     {
                         var vote = JsonConvert.DeserializeAnonymousType(json, definition);
                         Console.WriteLine($"Processing vote for '{vote.vote}' by '{vote.voter_id}'");
+
+                        // Check if we need to refresh the DB connection (for IAM auth token refresh)
+                        if (useIamAuth && DateTime.UtcNow - lastTokenRefresh > tokenRefreshInterval)
+                        {
+                            Console.WriteLine("Refreshing IAM auth token...");
+                            pgsql.Close();
+                            var newToken = RDSAuthTokenGenerator.GenerateAuthToken(
+                                Amazon.RegionEndpoint.GetBySystemName(awsRegion),
+                                dbHost,
+                                dbPort,
+                                dbUser
+                            );
+                            dbConnectionString = $"Server={dbHost};Port={dbPort};Username={dbUser};Password={newToken};Database={dbName};SSL Mode=Require;Trust Server Certificate=true";
+                            pgsql = OpenDbConnection(dbConnectionString);
+                            keepAliveCommand = pgsql.CreateCommand();
+                            keepAliveCommand.CommandText = "SELECT 1";
+                            lastTokenRefresh = DateTime.UtcNow;
+                        }
+
                         // Reconnect DB if down
                         if (!pgsql.State.Equals(System.Data.ConnectionState.Open))
                         {
                             Console.WriteLine("Reconnecting DB");
-                            pgsql = OpenDbConnection("Server=db;Username=postgres;Password=postgres;");
+                            pgsql = OpenDbConnection(dbConnectionString);
                         }
                         else
-                        { // Normal +1 vote requested
+                        {
                             UpdateVote(pgsql, vote.voter_id, vote.vote);
                         }
                     }
@@ -83,9 +141,9 @@ namespace Worker
                     Console.Error.WriteLine("Waiting for db");
                     Thread.Sleep(1000);
                 }
-                catch (DbException)
+                catch (DbException ex)
                 {
-                    Console.Error.WriteLine("Waiting for db");
+                    Console.Error.WriteLine($"Waiting for db: {ex.Message}");
                     Thread.Sleep(1000);
                 }
             }
@@ -102,18 +160,17 @@ namespace Worker
             return connection;
         }
 
-        private static ConnectionMultiplexer OpenRedisConnection(string hostname)
+        private static ConnectionMultiplexer OpenRedisConnection(string hostname, int port = 6379)
         {
-            // Use IP address to workaround https://github.com/StackExchange/StackExchange.Redis/issues/410
-            var ipAddress = GetIp(hostname);
-            Console.WriteLine($"Found redis at {ipAddress}");
+            var connectionString = $"{hostname}:{port}";
+            Console.WriteLine($"Connecting to redis at {connectionString}");
 
             while (true)
             {
                 try
                 {
                     Console.Error.WriteLine("Connecting to redis");
-                    return ConnectionMultiplexer.Connect(ipAddress);
+                    return ConnectionMultiplexer.Connect(connectionString);
                 }
                 catch (RedisConnectionException)
                 {
@@ -122,13 +179,6 @@ namespace Worker
                 }
             }
         }
-
-        private static string GetIp(string hostname)
-            => Dns.GetHostEntryAsync(hostname)
-                .Result
-                .AddressList
-                .First(a => a.AddressFamily == AddressFamily.InterNetwork)
-                .ToString();
 
         private static void UpdateVote(NpgsqlConnection connection, string voterId, string vote)
         {

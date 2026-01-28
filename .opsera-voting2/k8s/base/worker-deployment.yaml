@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  labels:
+    app: worker
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: voting2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+        app.kubernetes.io/name: worker
+    spec:
+      serviceAccountName: worker
+      containers:
+        - name: worker
+          image: PLACEHOLDER_WORKER_IMAGE
+          env:
+            # Database connection info (no password - uses IAM auth)
+            - name: DATABASE_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: voting2-config
+                  key: DATABASE_HOST
+            - name: DATABASE_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: voting2-config
+                  key: DATABASE_PORT
+            - name: DATABASE_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: voting2-config
+                  key: DATABASE_NAME
+            - name: DATABASE_USER
+              value: "app_user"
+            # IAM Auth enabled flag
+            - name: DATABASE_USE_IAM_AUTH
+              value: "true"
+            - name: AWS_REGION
+              value: "us-west-2"
+            # Redis connection
+            - name: REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: voting2-config
+                  key: REDIS_HOST
+            - name: REDIS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: voting2-config
+                  key: REDIS_PORT
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi

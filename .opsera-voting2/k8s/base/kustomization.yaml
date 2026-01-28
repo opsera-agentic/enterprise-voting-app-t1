@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: voting2-dev
+
+commonLabels:
+  app.kubernetes.io/managed-by: argocd
+  app.kubernetes.io/part-of: voting2
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - serviceaccounts.yaml
+  - vote-deployment.yaml
+  - vote-service.yaml
+  - result-deployment.yaml
+  - result-service.yaml
+  - worker-deployment.yaml
+  - ingress.yaml
+
+images:
+  - name: PLACEHOLDER_VOTE_IMAGE
+    newName: PLACEHOLDER_ECR_VOTE
+    newTag: latest
+  - name: PLACEHOLDER_RESULT_IMAGE
+    newName: PLACEHOLDER_ECR_RESULT
+    newTag: latest
+  - name: PLACEHOLDER_WORKER_IMAGE
+    newName: PLACEHOLDER_ECR_WORKER
+    newTag: latest
