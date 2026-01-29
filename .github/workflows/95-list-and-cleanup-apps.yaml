@@ -132,9 +132,8 @@ jobs:
               # Process each app (avoid subshell issue with while loop)
               while IFS='|' read -r NAME NS DEST SYNC HEALTH PATH; do
                 [ -z "$NAME" ] && continue
-                # Count pods in namespace
-                POD_COUNT=$(kubectl get pods -n "$NS" --no-headers 2>/dev/null | wc -l)
-                POD_COUNT=$(echo "$POD_COUNT" | tr -d ' ')
+                # Count pods in namespace using kubectl JSON and jq
+                POD_COUNT=$(kubectl get pods -n "$NS" -o json 2>/dev/null | jq '.items | length' 2>/dev/null || echo "0")
                 [ -z "$POD_COUNT" ] && POD_COUNT="0"
                 echo "${POD_COUNT}|${NAME}|${NS}|${DEST}|${SYNC}|${HEALTH}|${PATH}" >> /tmp/app_pods.txt
               done < /tmp/cluster_apps.txt
