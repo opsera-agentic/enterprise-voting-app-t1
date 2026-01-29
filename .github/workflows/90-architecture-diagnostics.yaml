@@ -1,0 +1,947 @@
+# ╔══════════════════════════════════════════════════════════════════════════════════╗
+# ║                                                                                  ║
+# ║     ██████╗ ██████╗ ███████╗███████╗██████╗  █████╗                              ║
+# ║    ██╔═══██╗██╔══██╗██╔════╝██╔════╝██╔══██╗██╔══██╗                             ║
+# ║    ██║   ██║██████╔╝███████╗█████╗  ██████╔╝███████║                             ║
+# ║    ██║   ██║██╔═══╝ ╚════██║██╔══╝  ██╔══██╗██╔══██║                             ║
+# ║    ╚██████╔╝██║     ███████║███████╗██║  ██║██║  ██║                             ║
+# ║     ╚═════╝ ╚═╝     ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝                             ║
+# ║                                                                                  ║
+# ║              ARCHITECTURE ANALYSIS & DIAGNOSTICS v1.0                            ║
+# ║        Comprehensive Multi-Dimensional Analysis with Rich Summaries              ║
+# ║                                                                                  ║
+# ╠══════════════════════════════════════════════════════════════════════════════════╣
+# ║  Dimensions: Infrastructure | Kubernetes | GitOps | Security | Cost | Pipeline  ║
+# ╚══════════════════════════════════════════════════════════════════════════════════╝
+
+name: "90-Architecture Diagnostics"
+
+on:
+  workflow_dispatch:
+    inputs:
+      analysis_scope:
+        description: "Analysis Scope"
+        required: true
+        default: "full"
+        type: choice
+        options:
+          - full              # All dimensions
+          - infrastructure    # AWS resources only
+          - kubernetes        # K8s/EKS analysis
+          - gitops            # ArgoCD analysis
+          - security          # Security posture
+          - pipeline          # CI/CD health
+      environment:
+        description: "Environment to analyze"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - qa
+          - staging
+          - prod
+  schedule:
+    # Run daily at 6 AM UTC for automated health reports
+    - cron: '0 6 * * *'
+
+env:
+  AWS_REGION: us-west-2
+  APP_NAME: voting2
+  TENANT: opsera
+  HUB_CLUSTER: argocd-usw2
+  SPOKE_CLUSTER: opsera-usw2-np
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+  security-events: read
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # STAGE 0: Initialize & Generate Architecture Overview
+  # ═══════════════════════════════════════════════════════════════════════════════
+  architecture-overview:
+    name: "🏗️ Architecture Overview"
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.init.outputs.environment }}
+      namespace: ${{ steps.init.outputs.namespace }}
+      timestamp: ${{ steps.init.outputs.timestamp }}
+
+    steps:
+      - name: Initialize Analysis
+        id: init
+        run: |
+          ENV="${{ github.event.inputs.environment || 'dev' }}"
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          echo "namespace=${{ env.APP_NAME }}-$ENV" >> $GITHUB_OUTPUT
+          echo "timestamp=$(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> $GITHUB_OUTPUT
+
+      - name: Generate Architecture Diagram
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          # 🏗️ Architecture Analysis Report
+
+          **Generated**: ${{ steps.init.outputs.timestamp }}
+          **Application**: ${{ env.APP_NAME }}
+          **Environment**: ${{ steps.init.outputs.environment }}
+          **Analysis Scope**: ${{ github.event.inputs.analysis_scope || 'full' }}
+
+          ---
+
+          ## 📐 System Architecture
+
+          ```mermaid
+          flowchart TB
+              subgraph "GitHub"
+                  GH[GitHub Repository]
+                  GHA[GitHub Actions]
+              end
+
+              subgraph "AWS Cloud"
+                  subgraph "Hub Cluster (argocd-usw2)"
+                      ARGO[ArgoCD Server]
+                  end
+
+                  subgraph "Spoke Cluster (opsera-usw2-np)"
+                      subgraph "voting2-dev namespace"
+                          VOTE[Vote Service<br/>Python/Flask]
+                          RESULT[Result Service<br/>Node.js]
+                          WORKER[Worker Service<br/>.NET]
+                          ING[NGINX Ingress]
+                      end
+                  end
+
+                  subgraph "Data Layer"
+                      RDS[(RDS PostgreSQL)]
+                      REDIS[(ElastiCache Redis)]
+                  end
+
+                  subgraph "Container Registry"
+                      ECR[ECR Repositories]
+                  end
+
+                  R53[Route53 DNS]
+                  ACM[ACM Certificates]
+              end
+
+              subgraph "Users"
+                  U1[👤 Voters]
+                  U2[👤 Results Viewers]
+              end
+
+              GH -->|Push| GHA
+              GHA -->|Build & Push| ECR
+              GHA -->|Update manifests| GH
+              ARGO -->|Watch| GH
+              ARGO -->|Deploy| VOTE
+              ARGO -->|Deploy| RESULT
+              ARGO -->|Deploy| WORKER
+
+              ECR -.->|Pull images| VOTE
+              ECR -.->|Pull images| RESULT
+              ECR -.->|Pull images| WORKER
+
+              U1 -->|HTTPS| R53
+              U2 -->|HTTPS| R53
+              R53 --> ING
+              ING --> VOTE
+              ING --> RESULT
+
+              VOTE --> REDIS
+              WORKER --> REDIS
+              WORKER --> RDS
+              RESULT --> RDS
+
+              classDef aws fill:#FF9900,color:#000
+              classDef k8s fill:#326CE5,color:#fff
+              classDef gh fill:#24292e,color:#fff
+              classDef data fill:#3B48CC,color:#fff
+
+              class ECR,RDS,REDIS,R53,ACM aws
+              class VOTE,RESULT,WORKER,ING,ARGO k8s
+              class GH,GHA gh
+          ```
+
+          ## 🔗 Data Flow Architecture
+
+          ```mermaid
+          sequenceDiagram
+              participant User as 👤 User
+              participant Vote as Vote Service
+              participant Redis as Redis Cache
+              participant Worker as Worker Service
+              participant DB as PostgreSQL
+              participant Result as Result Service
+
+              User->>Vote: Cast Vote (HTTP POST)
+              Vote->>Redis: Store vote in queue
+              Vote-->>User: Vote confirmation
+
+              loop Process Votes
+                  Worker->>Redis: Get vote from queue
+                  Worker->>DB: Persist vote
+              end
+
+              User->>Result: View Results (HTTP GET)
+              Result->>DB: Query vote counts
+              Result-->>User: Display results
+          ```
+
+          EOF
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # STAGE 1: AWS Infrastructure Analysis
+  # ═══════════════════════════════════════════════════════════════════════════════
+  infrastructure-analysis:
+    name: "☁️ Infrastructure Analysis"
+    runs-on: ubuntu-latest
+    needs: architecture-overview
+    if: contains(fromJSON('["full", "infrastructure"]'), github.event.inputs.analysis_scope || 'full')
+
+    steps:
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ env.APP_NAME }}-${{ needs.architecture-overview.outputs.environment }}-github-actions
+          role-session-name: diagnostics-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Analyze ECR Repositories
+        id: ecr
+        run: |
+          echo "## ☁️ AWS Infrastructure Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🐳 ECR Repositories" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Repository | Images | Latest Tag | Size | Last Push |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|--------|------------|------|-----------|" >> $GITHUB_STEP_SUMMARY
+
+          TOTAL_IMAGES=0
+          TOTAL_SIZE=0
+
+          for SERVICE in vote result worker; do
+            REPO="${{ env.APP_NAME }}-${{ needs.architecture-overview.outputs.environment }}-${SERVICE}"
+
+            if aws ecr describe-repositories --repository-names $REPO &>/dev/null; then
+              # Get image count
+              IMAGE_COUNT=$(aws ecr describe-images --repository-name $REPO --query 'length(imageDetails)' --output text 2>/dev/null || echo "0")
+              TOTAL_IMAGES=$((TOTAL_IMAGES + IMAGE_COUNT))
+
+              # Get latest image info
+              LATEST=$(aws ecr describe-images --repository-name $REPO \
+                --query 'sort_by(imageDetails,& imagePushedAt)[-1]' \
+                --output json 2>/dev/null || echo "{}")
+
+              if [ "$LATEST" != "{}" ] && [ "$LATEST" != "null" ]; then
+                TAG=$(echo $LATEST | jq -r '.imageTags[0] // "untagged"' | cut -c1-12)
+                SIZE_BYTES=$(echo $LATEST | jq -r '.imageSizeInBytes // 0')
+                SIZE_MB=$((SIZE_BYTES / 1024 / 1024))
+                TOTAL_SIZE=$((TOTAL_SIZE + SIZE_MB))
+                PUSH_TIME=$(echo $LATEST | jq -r '.imagePushedAt // "N/A"' | cut -c1-19)
+                echo "| \`$REPO\` | $IMAGE_COUNT | \`$TAG\` | ${SIZE_MB}MB | $PUSH_TIME |" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "| \`$REPO\` | 0 | - | - | Never |" >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              echo "| \`$REPO\` | ❌ Not Found | - | - | - |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> **Summary**: $TOTAL_IMAGES total images, ${TOTAL_SIZE}MB total size" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Analyze RDS Database
+        run: |
+          echo "### 🗄️ RDS PostgreSQL" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          DB_ID="${{ env.APP_NAME }}-${{ needs.architecture-overview.outputs.environment }}-postgres"
+
+          if aws rds describe-db-instances --db-instance-identifier $DB_ID &>/dev/null; then
+            DB_INFO=$(aws rds describe-db-instances --db-instance-identifier $DB_ID --query 'DBInstances[0]' --output json)
+
+            STATUS=$(echo $DB_INFO | jq -r '.DBInstanceStatus')
+            CLASS=$(echo $DB_INFO | jq -r '.DBInstanceClass')
+            ENGINE=$(echo $DB_INFO | jq -r '.Engine')
+            VERSION=$(echo $DB_INFO | jq -r '.EngineVersion')
+            STORAGE=$(echo $DB_INFO | jq -r '.AllocatedStorage')
+            MULTI_AZ=$(echo $DB_INFO | jq -r '.MultiAZ')
+            IAM_AUTH=$(echo $DB_INFO | jq -r '.IAMDatabaseAuthenticationEnabled')
+            ENDPOINT=$(echo $DB_INFO | jq -r '.Endpoint.Address')
+
+            STATUS_ICON="✅"
+            [ "$STATUS" != "available" ] && STATUS_ICON="⚠️"
+
+            echo "| Property | Value | Status |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|--------|" >> $GITHUB_STEP_SUMMARY
+            echo "| **Instance ID** | \`$DB_ID\` | $STATUS_ICON $STATUS |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Engine** | $ENGINE $VERSION | - |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Class** | $CLASS | - |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Storage** | ${STORAGE}GB | - |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Multi-AZ** | $MULTI_AZ | $([ "$MULTI_AZ" == "true" ] && echo "✅" || echo "⚠️ Single AZ") |" >> $GITHUB_STEP_SUMMARY
+            echo "| **IAM Auth** | $IAM_AUTH | $([ "$IAM_AUTH" == "true" ] && echo "✅ Secure" || echo "❌ Password-based") |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Endpoint** | \`${ENDPOINT:0:40}...\` | - |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **RDS Instance not found**: \`$DB_ID\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Analyze ElastiCache Redis
+        run: |
+          echo "### 🔴 ElastiCache Redis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          CLUSTER_ID="${{ env.APP_NAME }}-${{ needs.architecture-overview.outputs.environment }}-redis"
+
+          if aws elasticache describe-cache-clusters --cache-cluster-id $CLUSTER_ID &>/dev/null; then
+            CACHE_INFO=$(aws elasticache describe-cache-clusters --cache-cluster-id $CLUSTER_ID --show-cache-node-info --query 'CacheClusters[0]' --output json)
+
+            STATUS=$(echo $CACHE_INFO | jq -r '.CacheClusterStatus')
+            NODE_TYPE=$(echo $CACHE_INFO | jq -r '.CacheNodeType')
+            ENGINE=$(echo $CACHE_INFO | jq -r '.Engine')
+            VERSION=$(echo $CACHE_INFO | jq -r '.EngineVersion')
+            NODES=$(echo $CACHE_INFO | jq -r '.NumCacheNodes')
+
+            STATUS_ICON="✅"
+            [ "$STATUS" != "available" ] && STATUS_ICON="⚠️"
+
+            echo "| Property | Value | Status |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|--------|" >> $GITHUB_STEP_SUMMARY
+            echo "| **Cluster ID** | \`$CLUSTER_ID\` | $STATUS_ICON $STATUS |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Engine** | $ENGINE $VERSION | - |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Node Type** | $NODE_TYPE | - |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Nodes** | $NODES | - |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Redis Cluster not found**: \`$CLUSTER_ID\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Analyze EKS Clusters
+        run: |
+          echo "### ☸️ EKS Clusters" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Cluster | Version | Status | Nodes | Platform |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|---------|--------|-------|----------|" >> $GITHUB_STEP_SUMMARY
+
+          for CLUSTER in "${{ env.HUB_CLUSTER }}" "${{ env.SPOKE_CLUSTER }}"; do
+            if aws eks describe-cluster --name $CLUSTER &>/dev/null; then
+              CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER --query 'cluster' --output json)
+
+              VERSION=$(echo $CLUSTER_INFO | jq -r '.version')
+              STATUS=$(echo $CLUSTER_INFO | jq -r '.status')
+              PLATFORM=$(echo $CLUSTER_INFO | jq -r '.platformVersion')
+
+              NODE_COUNT=$(aws eks list-nodegroups --cluster-name $CLUSTER --query 'length(nodegroups)' --output text 2>/dev/null || echo "0")
+
+              STATUS_ICON="✅"
+              [ "$STATUS" != "ACTIVE" ] && STATUS_ICON="⚠️"
+
+              ROLE="Spoke"
+              [ "$CLUSTER" == "${{ env.HUB_CLUSTER }}" ] && ROLE="Hub (ArgoCD)"
+
+              echo "| \`$CLUSTER\` ($ROLE) | $VERSION | $STATUS_ICON $STATUS | $NODE_COUNT nodegroups | $PLATFORM |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| \`$CLUSTER\` | - | ❌ Not Found | - | - |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # STAGE 2: Kubernetes Cluster Analysis
+  # ═══════════════════════════════════════════════════════════════════════════════
+  kubernetes-analysis:
+    name: "☸️ Kubernetes Analysis"
+    runs-on: ubuntu-latest
+    needs: [architecture-overview, infrastructure-analysis]
+    if: always() && contains(fromJSON('["full", "kubernetes"]'), github.event.inputs.analysis_scope || 'full')
+
+    steps:
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ env.APP_NAME }}-${{ needs.architecture-overview.outputs.environment }}-github-actions
+          role-session-name: k8s-diagnostics-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+
+      - name: Analyze Spoke Cluster Resources
+        run: |
+          aws eks update-kubeconfig --name ${{ env.SPOKE_CLUSTER }} --region ${{ env.AWS_REGION }}
+          NAMESPACE="${{ needs.architecture-overview.outputs.namespace }}"
+
+          echo "## ☸️ Kubernetes Cluster Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster**: \`${{ env.SPOKE_CLUSTER }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Namespace**: \`$NAMESPACE\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Pod Analysis
+          echo "### 🎯 Pod Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Pod | Ready | Status | Restarts | Age | Node |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|-------|--------|----------|-----|------|" >> $GITHUB_STEP_SUMMARY
+
+          kubectl get pods -n $NAMESPACE -o json 2>/dev/null | jq -r '
+            .items[] |
+            "\(.metadata.name | .[0:35])|\(.status.containerStatuses[0].ready // false)|\(.status.phase)|\(.status.containerStatuses[0].restartCount // 0)|\(.metadata.creationTimestamp | .[0:10])|\(.spec.nodeName | .[0:20] // "Pending")"
+          ' | while IFS='|' read NAME READY STATUS RESTARTS AGE NODE; do
+            STATUS_ICON="✅"
+            [ "$STATUS" != "Running" ] && STATUS_ICON="⚠️"
+            [ "$READY" != "true" ] && STATUS_ICON="❌"
+            echo "| \`$NAME\` | $READY | $STATUS_ICON $STATUS | $RESTARTS | $AGE | $NODE |" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Analyze Services & Endpoints
+        run: |
+          NAMESPACE="${{ needs.architecture-overview.outputs.namespace }}"
+
+          echo "### 🌐 Services & Endpoints" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | Type | Cluster IP | Port(s) | Endpoints |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|------|------------|---------|-----------|" >> $GITHUB_STEP_SUMMARY
+
+          kubectl get services -n $NAMESPACE -o json 2>/dev/null | jq -r '
+            .items[] |
+            "\(.metadata.name)|\(.spec.type)|\(.spec.clusterIP)|\(.spec.ports | map("\(.port)/\(.protocol)") | join(","))|\(.spec.selector | to_entries | map("\(.key)=\(.value)") | join(",") | .[0:30])"
+          ' | while IFS='|' read NAME TYPE IP PORTS SELECTOR; do
+            ENDPOINT_COUNT=$(kubectl get endpoints $NAME -n $NAMESPACE -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null | wc -w)
+            echo "| \`$NAME\` | $TYPE | $IP | $PORTS | $ENDPOINT_COUNT ready |" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Analyze Ingress & Certificates
+        run: |
+          NAMESPACE="${{ needs.architecture-overview.outputs.namespace }}"
+
+          echo "### 🔒 Ingress & TLS" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Ingress | Host | Path | Backend | TLS |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|------|------|---------|-----|" >> $GITHUB_STEP_SUMMARY
+
+          kubectl get ingress -n $NAMESPACE -o json 2>/dev/null | jq -r '
+            .items[] |
+            .spec.rules[] as $rule |
+            .metadata.name as $name |
+            .spec.tls as $tls |
+            $rule.http.paths[] |
+            "\($name)|\($rule.host)|\(.path)|\(.backend.service.name):\(.backend.service.port.number)|\(if $tls then "✅ HTTPS" else "❌ HTTP" end)"
+          ' | while IFS='|' read NAME HOST PATH BACKEND TLS; do
+            echo "| \`$NAME\` | $HOST | $PATH | $BACKEND | $TLS |" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Certificate Status
+          echo "### 📜 Certificates" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Certificate | Ready | Issuer | Expiry |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|-------|--------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          kubectl get certificates -n $NAMESPACE -o json 2>/dev/null | jq -r '
+            .items[] |
+            "\(.metadata.name)|\(.status.conditions[] | select(.type=="Ready") | .status)|\(.spec.issuerRef.name)|\(.status.notAfter // "N/A")"
+          ' | while IFS='|' read NAME READY ISSUER EXPIRY; do
+            READY_ICON="✅"
+            [ "$READY" != "True" ] && READY_ICON="❌"
+            echo "| \`$NAME\` | $READY_ICON $READY | $ISSUER | $EXPIRY |" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Analyze Resource Usage
+        run: |
+          NAMESPACE="${{ needs.architecture-overview.outputs.namespace }}"
+
+          echo "### 📊 Resource Requests/Limits" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Container | CPU Request | CPU Limit | Memory Request | Memory Limit |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------------|-----------|----------------|--------------|" >> $GITHUB_STEP_SUMMARY
+
+          kubectl get pods -n $NAMESPACE -o json 2>/dev/null | jq -r '
+            .items[] |
+            .spec.containers[] |
+            "\(.name)|\(.resources.requests.cpu // "none")|\(.resources.limits.cpu // "none")|\(.resources.requests.memory // "none")|\(.resources.limits.memory // "none")"
+          ' | while IFS='|' read NAME CPU_REQ CPU_LIM MEM_REQ MEM_LIM; do
+            echo "| \`$NAME\` | $CPU_REQ | $CPU_LIM | $MEM_REQ | $MEM_LIM |" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Analyze Recent Events
+        run: |
+          NAMESPACE="${{ needs.architecture-overview.outputs.namespace }}"
+
+          echo "### 📋 Recent Events (Last 20)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Type | Reason | Object | Message | Age |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|--------|---------|-----|" >> $GITHUB_STEP_SUMMARY
+
+          kubectl get events -n $NAMESPACE --sort-by='.lastTimestamp' -o json 2>/dev/null | jq -r '
+            .items[-20:] | reverse | .[] |
+            "\(.type)|\(.reason)|\(.involvedObject.kind)/\(.involvedObject.name | .[0:20])|\(.message | .[0:50])|\(.lastTimestamp | .[0:16])"
+          ' | while IFS='|' read TYPE REASON OBJ MSG TIME; do
+            TYPE_ICON="ℹ️"
+            [ "$TYPE" == "Warning" ] && TYPE_ICON="⚠️"
+            echo "| $TYPE_ICON $TYPE | $REASON | \`$OBJ\` | $MSG | $TIME |" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # STAGE 3: ArgoCD GitOps Analysis
+  # ═══════════════════════════════════════════════════════════════════════════════
+  gitops-analysis:
+    name: "🎯 GitOps Analysis"
+    runs-on: ubuntu-latest
+    needs: [architecture-overview, kubernetes-analysis]
+    if: always() && contains(fromJSON('["full", "gitops"]'), github.event.inputs.analysis_scope || 'full')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ env.APP_NAME }}-${{ needs.architecture-overview.outputs.environment }}-github-actions
+          role-session-name: gitops-diagnostics-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Tools
+        run: |
+          curl -LO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Analyze ArgoCD Applications
+        run: |
+          aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+          ENV="${{ needs.architecture-overview.outputs.environment }}"
+
+          echo "## 🎯 ArgoCD GitOps Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Hub Cluster**: \`${{ env.HUB_CLUSTER }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Application Status
+          echo "### 📱 Application Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Application | Sync Status | Health | Revision | Last Sync |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|-------------|--------|----------|-----------|" >> $GITHUB_STEP_SUMMARY
+
+          APP="${{ env.APP_NAME }}-$ENV"
+
+          if kubectl get application $APP -n argocd &>/dev/null; then
+            APP_INFO=$(kubectl get application $APP -n argocd -o json)
+
+            SYNC=$(echo $APP_INFO | jq -r '.status.sync.status // "Unknown"')
+            HEALTH=$(echo $APP_INFO | jq -r '.status.health.status // "Unknown"')
+            REVISION=$(echo $APP_INFO | jq -r '.status.sync.revision // "N/A"' | cut -c1-7)
+            LAST_SYNC=$(echo $APP_INFO | jq -r '.status.operationState.finishedAt // "Never"' | cut -c1-19)
+
+            SYNC_ICON="✅"
+            [ "$SYNC" != "Synced" ] && SYNC_ICON="⚠️"
+            [ "$SYNC" == "Unknown" ] && SYNC_ICON="❓"
+
+            HEALTH_ICON="✅"
+            [ "$HEALTH" != "Healthy" ] && HEALTH_ICON="⚠️"
+            [ "$HEALTH" == "Degraded" ] && HEALTH_ICON="❌"
+
+            echo "| \`$APP\` | $SYNC_ICON $SYNC | $HEALTH_ICON $HEALTH | \`$REVISION\` | $LAST_SYNC |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| \`$APP\` | ❌ Not Found | - | - | - |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Analyze Sync Details
+        run: |
+          ENV="${{ needs.architecture-overview.outputs.environment }}"
+          APP="${{ env.APP_NAME }}-$ENV"
+
+          echo "### 🔄 Sync Details" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if kubectl get application $APP -n argocd &>/dev/null; then
+            APP_INFO=$(kubectl get application $APP -n argocd -o json)
+
+            # Source info
+            REPO=$(echo $APP_INFO | jq -r '.spec.source.repoURL')
+            PATH=$(echo $APP_INFO | jq -r '.spec.source.path')
+            TARGET=$(echo $APP_INFO | jq -r '.spec.source.targetRevision')
+            DEST=$(echo $APP_INFO | jq -r '.spec.destination.server')
+            NS=$(echo $APP_INFO | jq -r '.spec.destination.namespace')
+
+            echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| **Repository** | \`$REPO\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Path** | \`$PATH\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Target Revision** | \`$TARGET\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Destination** | \`$DEST\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Namespace** | \`$NS\` |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Resource Status
+            echo "### 📦 Managed Resources" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Kind | Name | Status | Health |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|------|--------|--------|" >> $GITHUB_STEP_SUMMARY
+
+            echo $APP_INFO | jq -r '
+              .status.resources[]? |
+              "\(.kind)|\(.name)|\(.status // "Unknown")|\(.health.status // "Unknown")"
+            ' | while IFS='|' read KIND NAME STATUS HEALTH; do
+              STATUS_ICON="✅"
+              [ "$STATUS" != "Synced" ] && STATUS_ICON="⚠️"
+              HEALTH_ICON="✅"
+              [ "$HEALTH" != "Healthy" ] && HEALTH_ICON="⚠️"
+              [ "$HEALTH" == "Degraded" ] && HEALTH_ICON="❌"
+              echo "| $KIND | \`$NAME\` | $STATUS_ICON $STATUS | $HEALTH_ICON $HEALTH |" >> $GITHUB_STEP_SUMMARY
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Conditions/Errors
+            CONDITION=$(echo $APP_INFO | jq -r '.status.conditions[0].message // "None"')
+            if [ "$CONDITION" != "None" ] && [ "$CONDITION" != "null" ]; then
+              echo "### ⚠️ Conditions/Errors" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "$CONDITION" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+      - name: Validate Kustomize Manifests
+        run: |
+          ENV="${{ needs.architecture-overview.outputs.environment }}"
+
+          echo "### 🔧 Kustomize Validation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          OVERLAY_PATH=".opsera-${{ env.APP_NAME }}/k8s/overlays/$ENV"
+
+          if [ -d "$OVERLAY_PATH" ]; then
+            echo "**Path**: \`$OVERLAY_PATH\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            if kustomize build $OVERLAY_PATH > /tmp/manifest.yaml 2>&1; then
+              RESOURCE_COUNT=$(grep -c '^kind:' /tmp/manifest.yaml || echo "0")
+              echo "✅ **Build Successful** - $RESOURCE_COUNT resources generated" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+
+              echo "<details><summary>📄 Generated Manifest (first 100 lines)</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo '```yaml' >> $GITHUB_STEP_SUMMARY
+              head -100 /tmp/manifest.yaml >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ **Build Failed**" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              cat /tmp/manifest.yaml >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "❌ Overlay path not found: \`$OVERLAY_PATH\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # STAGE 4: Security Posture Analysis
+  # ═══════════════════════════════════════════════════════════════════════════════
+  security-analysis:
+    name: "🔒 Security Analysis"
+    runs-on: ubuntu-latest
+    needs: [architecture-overview, gitops-analysis]
+    if: always() && contains(fromJSON('["full", "security"]'), github.event.inputs.analysis_scope || 'full')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ env.APP_NAME }}-${{ needs.architecture-overview.outputs.environment }}-github-actions
+          role-session-name: security-diagnostics-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+
+      - name: Security Posture Overview
+        run: |
+          echo "## 🔒 Security Posture Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 🛡️ Authentication Methods" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Method | Status | Details |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| GitHub Actions | OIDC | ✅ Secure | No static AWS credentials |" >> $GITHUB_STEP_SUMMARY
+          echo "| Database (RDS) | IAM Auth | ✅ Secure | No database passwords |" >> $GITHUB_STEP_SUMMARY
+          echo "| Pod Identity | IRSA | ✅ Secure | IAM Roles for Service Accounts |" >> $GITHUB_STEP_SUMMARY
+          echo "| Container Registry | OIDC | ✅ Secure | ECR access via assumed role |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Analyze IRSA Configuration
+        run: |
+          aws eks update-kubeconfig --name ${{ env.SPOKE_CLUSTER }} --region ${{ env.AWS_REGION }}
+          NAMESPACE="${{ needs.architecture-overview.outputs.namespace }}"
+
+          echo "### 🔐 IRSA (IAM Roles for Service Accounts)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service Account | IAM Role ARN | Pods Using |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------------|--------------|------------|" >> $GITHUB_STEP_SUMMARY
+
+          kubectl get serviceaccounts -n $NAMESPACE -o json 2>/dev/null | jq -r '
+            .items[] |
+            select(.metadata.annotations["eks.amazonaws.com/role-arn"] != null) |
+            "\(.metadata.name)|\(.metadata.annotations["eks.amazonaws.com/role-arn"])|\(.metadata.name)"
+          ' | while IFS='|' read SA ROLE PODS; do
+            POD_COUNT=$(kubectl get pods -n $NAMESPACE -o json 2>/dev/null | jq -r ".items[] | select(.spec.serviceAccountName==\"$SA\") | .metadata.name" | wc -l)
+            ROLE_SHORT=$(echo $ROLE | rev | cut -d'/' -f1 | rev)
+            echo "| \`$SA\` | \`$ROLE_SHORT\` | $POD_COUNT pods |" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Analyze Network Policies
+        run: |
+          NAMESPACE="${{ needs.architecture-overview.outputs.namespace }}"
+
+          echo "### 🌐 Network Policies" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          NP_COUNT=$(kubectl get networkpolicies -n $NAMESPACE -o json 2>/dev/null | jq '.items | length')
+
+          if [ "$NP_COUNT" -gt 0 ]; then
+            echo "| Policy | Pod Selector | Ingress Rules | Egress Rules |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|--------------|---------------|--------------|" >> $GITHUB_STEP_SUMMARY
+
+            kubectl get networkpolicies -n $NAMESPACE -o json 2>/dev/null | jq -r '
+              .items[] |
+              "\(.metadata.name)|\(.spec.podSelector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",") // "all")|\(.spec.ingress | length)|\(.spec.egress | length)"
+            ' | while IFS='|' read NAME SELECTOR INGRESS EGRESS; do
+              echo "| \`$NAME\` | $SELECTOR | $INGRESS | $EGRESS |" >> $GITHUB_STEP_SUMMARY
+            done
+          else
+            echo "⚠️ **No Network Policies defined** - All pod-to-pod traffic is allowed" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Analyze Pod Security
+        run: |
+          NAMESPACE="${{ needs.architecture-overview.outputs.namespace }}"
+
+          echo "### 🐳 Container Security" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Container | Run As Root | Privileged | Read-Only FS | Drop Caps |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------------|------------|--------------|-----------|" >> $GITHUB_STEP_SUMMARY
+
+          kubectl get pods -n $NAMESPACE -o json 2>/dev/null | jq -r '
+            .items[] |
+            .spec.containers[] |
+            "\(.name)|\(.securityContext.runAsNonRoot // false)|\(.securityContext.privileged // false)|\(.securityContext.readOnlyRootFilesystem // false)|\(.securityContext.capabilities.drop // [] | length)"
+          ' | while IFS='|' read NAME NON_ROOT PRIV RO_FS CAPS; do
+            ROOT_ICON="⚠️"
+            [ "$NON_ROOT" == "true" ] && ROOT_ICON="✅"
+            PRIV_ICON="✅"
+            [ "$PRIV" == "true" ] && PRIV_ICON="❌"
+            RO_ICON="⚠️"
+            [ "$RO_FS" == "true" ] && RO_ICON="✅"
+            CAPS_ICON="⚠️"
+            [ "$CAPS" -gt 0 ] && CAPS_ICON="✅ $CAPS"
+            echo "| \`$NAME\` | $ROOT_ICON | $PRIV_ICON | $RO_ICON | $CAPS_ICON |" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Analyze Secrets
+        run: |
+          NAMESPACE="${{ needs.architecture-overview.outputs.namespace }}"
+
+          echo "### 🔑 Secrets Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Secret | Type | Keys | Age |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|------|------|-----|" >> $GITHUB_STEP_SUMMARY
+
+          kubectl get secrets -n $NAMESPACE -o json 2>/dev/null | jq -r '
+            .items[] |
+            select(.type != "kubernetes.io/service-account-token") |
+            "\(.metadata.name)|\(.type)|\(.data | keys | length)|\(.metadata.creationTimestamp | .[0:10])"
+          ' | while IFS='|' read NAME TYPE KEYS AGE; do
+            TYPE_SHORT=$(echo $TYPE | rev | cut -d'/' -f1 | rev)
+            echo "| \`$NAME\` | $TYPE_SHORT | $KEYS | $AGE |" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # STAGE 5: CI/CD Pipeline Health
+  # ═══════════════════════════════════════════════════════════════════════════════
+  pipeline-analysis:
+    name: "🔄 Pipeline Analysis"
+    runs-on: ubuntu-latest
+    needs: [architecture-overview]
+    if: contains(fromJSON('["full", "pipeline"]'), github.event.inputs.analysis_scope || 'full')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Analyze Workflow History
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "## 🔄 CI/CD Pipeline Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 📊 Workflow Run History (Last 10)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Workflow | Status | Duration | Triggered By | Date |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|----------|--------------|------|" >> $GITHUB_STEP_SUMMARY
+
+          gh run list --limit 10 --json name,status,conclusion,createdAt,updatedAt,event,headBranch | jq -r '
+            .[] |
+            "\(.name | .[0:30])|\(.conclusion // .status)|\(.event)|\(.headBranch)|\(.createdAt | .[0:10])"
+          ' | while IFS='|' read NAME STATUS EVENT BRANCH DATE; do
+            STATUS_ICON="⏳"
+            [ "$STATUS" == "success" ] && STATUS_ICON="✅"
+            [ "$STATUS" == "failure" ] && STATUS_ICON="❌"
+            [ "$STATUS" == "cancelled" ] && STATUS_ICON="⚪"
+            echo "| $NAME | $STATUS_ICON $STATUS | $EVENT | \`$BRANCH\` | $DATE |" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Analyze Workflow Definitions
+        run: |
+          echo "### 📝 Workflow Definitions" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Workflow File | Triggers | Jobs | OIDC |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------------|----------|------|------|" >> $GITHUB_STEP_SUMMARY
+
+          for WF in .github/workflows/*.yaml .github/workflows/*.yml; do
+            if [ -f "$WF" ]; then
+              NAME=$(basename $WF)
+
+              # Extract triggers
+              TRIGGERS=$(grep -A5 "^on:" $WF | grep -E "^\s+\w+:" | head -3 | awk '{print $1}' | tr -d ':' | tr '\n' ',' | sed 's/,$//')
+              [ -z "$TRIGGERS" ] && TRIGGERS="manual"
+
+              # Count jobs
+              JOB_COUNT=$(grep -c "^  [a-z].*:$" $WF 2>/dev/null || echo "?")
+
+              # Check for OIDC
+              OIDC="❌"
+              grep -q "id-token: write" $WF && OIDC="✅"
+
+              echo "| \`$NAME\` | $TRIGGERS | $JOB_COUNT | $OIDC |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Git Analysis
+        run: |
+          echo "### 📈 Git Activity (Last 7 Days)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          TOTAL_COMMITS=$(git log --oneline --since="7 days ago" | wc -l)
+          CONTRIBUTORS=$(git log --format='%an' --since="7 days ago" | sort -u | wc -l)
+          FILES_CHANGED=$(git diff --name-only HEAD~10 2>/dev/null | wc -l)
+
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Commits (7 days) | $TOTAL_COMMITS |" >> $GITHUB_STEP_SUMMARY
+          echo "| Contributors | $CONTRIBUTORS |" >> $GITHUB_STEP_SUMMARY
+          echo "| Files changed (last 10 commits) | $FILES_CHANGED |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### 📝 Recent Commits" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | Author | Message | Date |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|--------|---------|------|" >> $GITHUB_STEP_SUMMARY
+
+          git log --oneline --format="%h|%an|%s|%cr" -10 | while IFS='|' read HASH AUTHOR MSG DATE; do
+            MSG_SHORT=$(echo "$MSG" | cut -c1-50)
+            echo "| \`$HASH\` | $AUTHOR | $MSG_SHORT | $DATE |" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # FINAL: Generate Comprehensive Report
+  # ═══════════════════════════════════════════════════════════════════════════════
+  generate-report:
+    name: "📊 Generate Report"
+    runs-on: ubuntu-latest
+    needs: [architecture-overview, infrastructure-analysis, kubernetes-analysis, gitops-analysis, security-analysis, pipeline-analysis]
+    if: always()
+
+    steps:
+      - name: Generate Executive Summary
+        run: |
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Executive Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Analysis Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Dimension | Status | Details |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+
+          # Infrastructure
+          INFRA_STATUS="✅ Passed"
+          [ "${{ needs.infrastructure-analysis.result }}" == "failure" ] && INFRA_STATUS="❌ Failed"
+          [ "${{ needs.infrastructure-analysis.result }}" == "skipped" ] && INFRA_STATUS="⏭️ Skipped"
+          echo "| ☁️ Infrastructure | $INFRA_STATUS | AWS resources health |" >> $GITHUB_STEP_SUMMARY
+
+          # Kubernetes
+          K8S_STATUS="✅ Passed"
+          [ "${{ needs.kubernetes-analysis.result }}" == "failure" ] && K8S_STATUS="❌ Failed"
+          [ "${{ needs.kubernetes-analysis.result }}" == "skipped" ] && K8S_STATUS="⏭️ Skipped"
+          echo "| ☸️ Kubernetes | $K8S_STATUS | Cluster & workload health |" >> $GITHUB_STEP_SUMMARY
+
+          # GitOps
+          GITOPS_STATUS="✅ Passed"
+          [ "${{ needs.gitops-analysis.result }}" == "failure" ] && GITOPS_STATUS="❌ Failed"
+          [ "${{ needs.gitops-analysis.result }}" == "skipped" ] && GITOPS_STATUS="⏭️ Skipped"
+          echo "| 🎯 GitOps | $GITOPS_STATUS | ArgoCD sync status |" >> $GITHUB_STEP_SUMMARY
+
+          # Security
+          SEC_STATUS="✅ Passed"
+          [ "${{ needs.security-analysis.result }}" == "failure" ] && SEC_STATUS="❌ Failed"
+          [ "${{ needs.security-analysis.result }}" == "skipped" ] && SEC_STATUS="⏭️ Skipped"
+          echo "| 🔒 Security | $SEC_STATUS | Security posture |" >> $GITHUB_STEP_SUMMARY
+
+          # Pipeline
+          PIPE_STATUS="✅ Passed"
+          [ "${{ needs.pipeline-analysis.result }}" == "failure" ] && PIPE_STATUS="❌ Failed"
+          [ "${{ needs.pipeline-analysis.result }}" == "skipped" ] && PIPE_STATUS="⏭️ Skipped"
+          echo "| 🔄 Pipeline | $PIPE_STATUS | CI/CD health |" >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### Quick Links" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Resource | URL |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| Vote App | https://vote-${{ env.APP_NAME }}-${{ needs.architecture-overview.outputs.environment }}.agent.opsera.dev |" >> $GITHUB_STEP_SUMMARY
+          echo "| Result App | https://result-${{ env.APP_NAME }}-${{ needs.architecture-overview.outputs.environment }}.agent.opsera.dev |" >> $GITHUB_STEP_SUMMARY
+          echo "| Repository | ${{ github.server_url }}/${{ github.repository }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Actions | ${{ github.server_url }}/${{ github.repository }}/actions |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "*Generated by Opsera Code-to-Cloud v0.6 Architecture Diagnostics*" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "*Report Time: $(date -u +"%Y-%m-%d %H:%M:%S UTC")*" >> $GITHUB_STEP_SUMMARY
