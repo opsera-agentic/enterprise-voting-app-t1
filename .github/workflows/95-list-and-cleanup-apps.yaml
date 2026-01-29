@@ -128,10 +128,15 @@ jobs:
 
               # Get namespace pod counts as JSON object
               echo "Getting pod counts from spoke..."
-              kubectl get pods --all-namespaces -o json 2>/dev/null | jq '
+              echo "Testing kubectl connection..."
+              kubectl cluster-info || echo "kubectl cluster-info failed"
+              echo "Counting pods..."
+              kubectl get pods --all-namespaces --no-headers 2>&1 | head -20 || echo "kubectl get pods failed"
+              echo "Getting pods as JSON..."
+              kubectl get pods --all-namespaces -o json 2>&1 | jq '
                 [.items[] | .metadata.namespace] | group_by(.) |
                 map({key: .[0], value: length}) | from_entries
-              ' > /tmp/ns_pod_counts.json 2>/dev/null || echo '{}' > /tmp/ns_pod_counts.json
+              ' > /tmp/ns_pod_counts.json || echo '{}' > /tmp/ns_pod_counts.json
 
               # Debug: show pod counts
               echo "Pod counts by namespace:"
