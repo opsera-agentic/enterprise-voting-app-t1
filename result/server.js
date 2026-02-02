@@ -81,25 +81,25 @@ async function initializeDatabase() {
     console.error('Unexpected pool error:', err.message);
   });
 
-  async.retry(
-    {times: 100, interval: 2000},
-    async function(callback) {
-      try {
-        const client = await pool.connect();
-        callback(null, client);
-      } catch (err) {
-        console.error("Waiting for db:", err.message);
-        callback(err);
-      }
-    },
-    function(err, client) {
-      if (err) {
-        return console.error("Giving up connecting to database");
-      }
+  // Simple retry loop with async/await
+  const maxRetries = 100;
+  const retryInterval = 3000; // 3 seconds between retries
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const client = await pool.connect();
       console.log("Connected to db");
       getVotes(client);
+      return; // Success, exit function
+    } catch (err) {
+      console.error(`Waiting for db (attempt ${attempt}/${maxRetries}):`, err.message);
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, retryInterval));
+      }
     }
-  );
+  }
+
+  console.error("Giving up connecting to database after " + maxRetries + " attempts");
 }
 
 function getVotes(client) {
