@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: voting01-config
+  labels:
+    app.kubernetes.io/name: voting01
+    environment: dev
+data:
+  # Redis Configuration (for Vote service)
+  REDIS_HOST: PLACEHOLDER_REDIS_HOST
+  REDIS_PORT: "6379"
+
+  # PostgreSQL Configuration (for Result service)
+  DATABASE_HOST: PLACEHOLDER_DATABASE_HOST
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: votes
+  DATABASE_USER: postgres
+
+  # AWS Secrets Manager ARN for DB credentials
+  DATABASE_SECRET_ARN: PLACEHOLDER_DATABASE_SECRET_ARN
+
+  # Application Settings
+  ENVIRONMENT: dev
+  LOG_LEVEL: debug

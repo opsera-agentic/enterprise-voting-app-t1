@@ -1,0 +1,107 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# DEPLOYMENT LANDSCAPE - voting01
+# Stakeholder dashboard with environment status
+# ════════════════════════════════════════════════════════════════════════════════
+
+name: "📊 Landscape (voting01)"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+
+env:
+  APP_NAME: voting01
+  AWS_REGION: us-west-2
+  HUB_CLUSTER: argocd-usw2
+  SPOKE_CLUSTER: opsera-usw2-np
+
+jobs:
+  collect-metrics:
+    name: "📊 Collect Metrics"
+    runs-on: ubuntu-latest
+    outputs:
+      dev_sync: ${{ steps.dev.outputs.sync }}
+      dev_health: ${{ steps.dev.outputs.health }}
+      dev_pods: ${{ steps.dev.outputs.pods }}
+      vote_status: ${{ steps.health.outputs.vote }}
+      result_status: ${{ steps.health.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: DEV Metrics
+        id: dev
+        run: |
+          aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+          SYNC=$(kubectl get application ${{ env.APP_NAME }}-dev -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+          HEALTH=$(kubectl get application ${{ env.APP_NAME }}-dev -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
+
+          echo "sync=${SYNC}" >> $GITHUB_OUTPUT
+          echo "health=${HEALTH}" >> $GITHUB_OUTPUT
+
+          aws eks update-kubeconfig --name ${{ env.SPOKE_CLUSTER }} --region ${{ env.AWS_REGION }}
+          PODS=$(kubectl get pods -n ${{ env.APP_NAME }}-dev --no-headers 2>/dev/null | wc -l | tr -d ' ')
+          echo "pods=${PODS}" >> $GITHUB_OUTPUT
+
+      - name: Health Checks
+        id: health
+        run: |
+          VOTE=$(curl -s -o /dev/null -w "%{http_code}" "https://vote-${{ env.APP_NAME }}-dev.agent.opsera.dev" --max-time 10 || echo "000")
+          RESULT=$(curl -s -o /dev/null -w "%{http_code}" "https://result-${{ env.APP_NAME }}-dev.agent.opsera.dev" --max-time 10 || echo "000")
+
+          echo "vote=${VOTE}" >> $GITHUB_OUTPUT
+          echo "result=${RESULT}" >> $GITHUB_OUTPUT
+
+  generate-report:
+    name: "📊 Generate Report"
+    needs: [collect-metrics]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Dashboard
+        run: |
+          echo "# 📊 voting01 Deployment Landscape" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_Generated: $(date -u +'%Y-%m-%d %H:%M UTC')_" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## Environment Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Env | Sync | Health | Pods | Strategy |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|------|--------|------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| DEV | ${{ needs.collect-metrics.outputs.dev_sync }} | ${{ needs.collect-metrics.outputs.dev_health }} | ${{ needs.collect-metrics.outputs.dev_pods }} | Rolling |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## Endpoint Health" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | URL | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Vote | https://vote-voting01-dev.agent.opsera.dev | HTTP ${{ needs.collect-metrics.outputs.vote_status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Result | https://result-voting01-dev.agent.opsera.dev | HTTP ${{ needs.collect-metrics.outputs.result_status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## Architecture" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "User → Vote App → Redis → Worker → Postgres → Result App → User" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## Quick Commands" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "# Run CI/CD" >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run \"ci-build-push-voting01-dev.yaml\"" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Run Diagnostics" >> $GITHUB_STEP_SUMMARY
+          echo "gh workflow run \"diagnostics-voting01.yaml\" -f diagnostic_type=full-pipeline" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "_Powered by Opsera Code-to-Cloud Enterprise_" >> $GITHUB_STEP_SUMMARY

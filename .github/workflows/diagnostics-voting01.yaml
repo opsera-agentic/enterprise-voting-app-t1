@@ -1,0 +1,204 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# DIAGNOSTICS - voting01
+# Full pipeline debugging for all components
+# ════════════════════════════════════════════════════════════════════════════════
+
+name: "🔬 Diagnostics (voting01)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      diagnostic_type:
+        description: 'Type of diagnostic'
+        required: true
+        type: choice
+        options:
+          - full-pipeline
+          - pod-logs
+          - argocd-debug
+          - force-sync
+        default: full-pipeline
+
+env:
+  APP_NAME: voting01
+  ENVIRONMENT: dev
+  AWS_REGION: us-west-2
+  HUB_CLUSTER: argocd-usw2
+  SPOKE_CLUSTER: opsera-usw2-np
+
+jobs:
+  full-pipeline:
+    name: "🔍 Full Pipeline"
+    runs-on: ubuntu-latest
+    if: inputs.diagnostic_type == 'full-pipeline'
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: "📦 Stage 1: ECR Check"
+        run: |
+          echo "### 📦 Stage 1: ECR Repositories" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          for SERVICE in vote result worker; do
+            REPO="opsera/${{ env.APP_NAME }}-${SERVICE}"
+            if aws ecr describe-repositories --repository-names $REPO 2>/dev/null; then
+              IMAGES=$(aws ecr describe-images --repository-name $REPO --query 'imageDetails | length(@)' --output text 2>/dev/null || echo "0")
+              echo "✅ $REPO: $IMAGES images" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ $REPO: NOT FOUND" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+      - name: "🎯 Stage 2: EKS/Namespace Check"
+        run: |
+          aws eks update-kubeconfig --name ${{ env.SPOKE_CLUSTER }} --region ${{ env.AWS_REGION }}
+          NS="${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}"
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🎯 Stage 2: Kubernetes" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if kubectl get namespace $NS 2>/dev/null; then
+            echo "✅ Namespace: $NS" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Namespace NOT FOUND: $NS" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Pods:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get pods -n $NS -o wide 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No pods found" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Services:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get svc -n $NS 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No services found" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Ingress:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get ingress -n $NS 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No ingress found" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: "🔄 Stage 3: ArgoCD Status"
+        run: |
+          aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔄 Stage 3: ArgoCD" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          APP="${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}"
+          STATUS=$(kubectl get application $APP -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+          HEALTH=$(kubectl get application $APP -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
+
+          echo "- Sync: **$STATUS**" >> $GITHUB_STEP_SUMMARY
+          echo "- Health: **$HEALTH**" >> $GITHUB_STEP_SUMMARY
+
+      - name: "🏥 Stage 4: Health Checks"
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🏥 Stage 4: Endpoints" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          for SERVICE in vote result; do
+            URL="https://${SERVICE}-${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}.agent.opsera.dev"
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" --max-time 10 || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "✅ $SERVICE: HTTP $STATUS - $URL" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ $SERVICE: HTTP $STATUS - $URL" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+  pod-logs:
+    name: "📋 Pod Logs"
+    runs-on: ubuntu-latest
+    if: inputs.diagnostic_type == 'pod-logs'
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get Pod Logs
+        run: |
+          aws eks update-kubeconfig --name ${{ env.SPOKE_CLUSTER }} --region ${{ env.AWS_REGION }}
+          NS="${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}"
+
+          echo "### 📋 Pod Logs" >> $GITHUB_STEP_SUMMARY
+
+          for SERVICE in vote result worker; do
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "#### $SERVICE" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            kubectl logs -n $NS -l app=$SERVICE --tail=50 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No logs available" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          done
+
+  argocd-debug:
+    name: "🔄 ArgoCD Debug"
+    runs-on: ubuntu-latest
+    if: inputs.diagnostic_type == 'argocd-debug'
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Debug ArgoCD
+        run: |
+          aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+          APP="${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}"
+
+          echo "### 🔄 ArgoCD Application: $APP" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```yaml' >> $GITHUB_STEP_SUMMARY
+          kubectl get application $APP -n argocd -o yaml >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Events" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get events -n argocd --field-selector involvedObject.name=$APP --sort-by='.lastTimestamp' | tail -20 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  force-sync:
+    name: "⚡ Force Sync"
+    runs-on: ubuntu-latest
+    if: inputs.diagnostic_type == 'force-sync'
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Force Sync
+        run: |
+          aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+          APP="${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}"
+
+          echo "### ⚡ Force Sync: $APP" >> $GITHUB_STEP_SUMMARY
+
+          kubectl annotate application $APP -n argocd argocd.argoproj.io/refresh=hard --overwrite
+          echo "✅ Sync triggered" >> $GITHUB_STEP_SUMMARY
+
+          sleep 30
+
+          STATUS=$(kubectl get application $APP -n argocd -o jsonpath='{.status.sync.status}')
+          HEALTH=$(kubectl get application $APP -n argocd -o jsonpath='{.status.health.status}')
+
+          echo "- Sync: **$STATUS**" >> $GITHUB_STEP_SUMMARY
+          echo "- Health: **$HEALTH**" >> $GITHUB_STEP_SUMMARY

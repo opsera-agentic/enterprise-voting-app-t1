@@ -1,0 +1,238 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# BOOTSTRAP INFRASTRUCTURE - voting01
+# Touchless: Terraform → Update Manifests → Apply ArgoCD
+# ════════════════════════════════════════════════════════════════════════════════
+
+name: "00-Bootstrap (voting01)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Terraform action'
+        type: choice
+        options: [plan, apply, destroy]
+        default: 'apply'
+      skip_terraform:
+        description: 'Skip Terraform (ArgoCD only)'
+        type: boolean
+        default: false
+
+env:
+  APP_NAME: voting01
+  ENVIRONMENT: dev
+  AWS_REGION: us-west-2
+  HUB_CLUSTER: argocd-usw2
+  SPOKE_CLUSTER: opsera-usw2-np
+
+jobs:
+  terraform:
+    name: "🏗️ Terraform"
+    runs-on: ubuntu-latest
+    if: inputs.skip_terraform != true
+    outputs:
+      rds_address: ${{ steps.output.outputs.rds_address }}
+      redis_address: ${{ steps.output.outputs.redis_address }}
+      vote_irsa: ${{ steps.output.outputs.vote_irsa }}
+      result_irsa: ${{ steps.output.outputs.result_irsa }}
+      worker_irsa: ${{ steps.output.outputs.worker_irsa }}
+      secret_arn: ${{ steps.output.outputs.secret_arn }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6.0"
+
+      - name: Terraform Init
+        working-directory: .opsera-voting01/terraform
+        run: terraform init -backend-config="key=voting01/dev/terraform.tfstate"
+
+      - name: Terraform Plan
+        working-directory: .opsera-voting01/terraform
+        run: terraform plan -var-file="dev.tfvars" -out=tfplan
+
+      - name: Terraform Apply
+        if: inputs.action == 'apply'
+        working-directory: .opsera-voting01/terraform
+        run: terraform apply -auto-approve tfplan
+
+      - name: Terraform Destroy
+        if: inputs.action == 'destroy'
+        working-directory: .opsera-voting01/terraform
+        run: terraform destroy -var-file="dev.tfvars" -auto-approve
+
+      - name: Get Outputs
+        id: output
+        if: inputs.action == 'apply'
+        working-directory: .opsera-voting01/terraform
+        run: |
+          echo "rds_address=$(terraform output -raw rds_address)" >> $GITHUB_OUTPUT
+          echo "redis_address=$(terraform output -raw elasticache_endpoint)" >> $GITHUB_OUTPUT
+          echo "vote_irsa=$(terraform output -raw irsa_vote_role_arn)" >> $GITHUB_OUTPUT
+          echo "result_irsa=$(terraform output -raw irsa_result_role_arn)" >> $GITHUB_OUTPUT
+          echo "worker_irsa=$(terraform output -raw irsa_worker_role_arn)" >> $GITHUB_OUTPUT
+          echo "secret_arn=$(terraform output -raw rds_master_secret_arn)" >> $GITHUB_OUTPUT
+
+      - name: Summary
+        if: inputs.action == 'apply'
+        run: |
+          echo "### 🏗️ Infrastructure Created" >> $GITHUB_STEP_SUMMARY
+          echo "- RDS: \`${{ steps.output.outputs.rds_address }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Redis: \`${{ steps.output.outputs.redis_address }}\`" >> $GITHUB_STEP_SUMMARY
+
+  create-ecr:
+    name: "📦 Create ECR Repos"
+    runs-on: ubuntu-latest
+    if: inputs.action == 'apply'
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create ECR Repositories
+        run: |
+          for SERVICE in vote result worker; do
+            REPO="opsera/${{ env.APP_NAME }}-${SERVICE}"
+            aws ecr describe-repositories --repository-names $REPO 2>/dev/null || \
+            aws ecr create-repository --repository-name $REPO --image-scanning-configuration scanOnPush=true
+            echo "✅ ECR: $REPO" >> $GITHUB_STEP_SUMMARY
+          done
+
+  update-manifests:
+    name: "📝 Update Manifests"
+    needs: [terraform]
+    if: always() && (needs.terraform.result == 'success' || inputs.skip_terraform == true) && inputs.action == 'apply'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Get Terraform Outputs
+        id: tf
+        working-directory: .opsera-voting01/terraform
+        run: |
+          terraform init -backend-config="key=voting01/dev/terraform.tfstate"
+          echo "rds_address=$(terraform output -raw rds_address)" >> $GITHUB_OUTPUT
+          echo "redis_address=$(terraform output -raw elasticache_endpoint)" >> $GITHUB_OUTPUT
+          echo "vote_irsa=$(terraform output -raw irsa_vote_role_arn)" >> $GITHUB_OUTPUT
+          echo "result_irsa=$(terraform output -raw irsa_result_role_arn)" >> $GITHUB_OUTPUT
+          echo "worker_irsa=$(terraform output -raw irsa_worker_role_arn)" >> $GITHUB_OUTPUT
+          echo "secret_arn=$(terraform output -raw rds_master_secret_arn)" >> $GITHUB_OUTPUT
+
+      - name: Update ConfigMap
+        run: |
+          sed -i "s|PLACEHOLDER_REDIS_HOST|${{ steps.tf.outputs.redis_address }}|g" .opsera-voting01/k8s/overlays/dev/configmap.yaml
+          sed -i "s|PLACEHOLDER_DATABASE_HOST|${{ steps.tf.outputs.rds_address }}|g" .opsera-voting01/k8s/overlays/dev/configmap.yaml
+          sed -i "s|PLACEHOLDER_DATABASE_SECRET_ARN|${{ steps.tf.outputs.secret_arn }}|g" .opsera-voting01/k8s/overlays/dev/configmap.yaml
+
+      - name: Update ServiceAccounts
+        run: |
+          sed -i "s|PLACEHOLDER_VOTE_IRSA_ROLE|${{ steps.tf.outputs.vote_irsa }}|g" .opsera-voting01/k8s/overlays/dev/serviceaccounts.yaml
+          sed -i "s|PLACEHOLDER_RESULT_IRSA_ROLE|${{ steps.tf.outputs.result_irsa }}|g" .opsera-voting01/k8s/overlays/dev/serviceaccounts.yaml
+          sed -i "s|PLACEHOLDER_WORKER_IRSA_ROLE|${{ steps.tf.outputs.worker_irsa }}|g" .opsera-voting01/k8s/overlays/dev/serviceaccounts.yaml
+
+      - name: Update ECR Registry
+        run: |
+          ECR="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+          sed -i "s|PLACEHOLDER_ECR_REGISTRY|${ECR}|g" .opsera-voting01/k8s/overlays/dev/kustomization.yaml
+
+      - name: Commit & Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .opsera-voting01/k8s/
+          git diff --cached --quiet || git commit -m "bootstrap(voting01): Configure DEV manifests [skip ci]"
+          git pull --rebase origin main
+          git push origin main
+
+  apply-argocd:
+    name: "🚀 Apply ArgoCD"
+    needs: [update-manifests, create-ecr]
+    if: always() && needs.update-manifests.result == 'success' && inputs.action == 'apply'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubectl
+        run: aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+      - name: Create Repo Secret
+        run: |
+          kubectl get secret repo-${{ env.APP_NAME }} -n argocd 2>/dev/null || \
+          kubectl create secret generic repo-${{ env.APP_NAME }} -n argocd \
+            --from-literal=type=git \
+            --from-literal=url="https://github.com/${{ github.repository }}.git" \
+            --from-literal=password="${{ secrets.GH_PAT }}" \
+            --from-literal=username="git"
+          kubectl label secret repo-${{ env.APP_NAME }} -n argocd argocd.argoproj.io/secret-type=repository --overwrite
+
+      - name: Apply ArgoCD App
+        run: kubectl apply -f .opsera-voting01/argocd/dev/application.yaml
+
+      - name: Trigger Sync
+        run: |
+          kubectl annotate application ${{ env.APP_NAME }}-${{ env.ENVIRONMENT }} -n argocd argocd.argoproj.io/refresh=hard --overwrite
+          echo "✅ ArgoCD app applied and sync triggered" >> $GITHUB_STEP_SUMMARY
+
+      - name: Wait for Sync
+        run: |
+          for i in {1..30}; do
+            STATUS=$(kubectl get application ${{ env.APP_NAME }}-${{ env.ENVIRONMENT }} -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+            echo "Sync: $STATUS"
+            [ "$STATUS" == "Synced" ] && exit 0
+            sleep 10
+          done
+          echo "⚠️ Sync still in progress"
+
+  summary:
+    name: "📊 Summary"
+    needs: [terraform, create-ecr, update-manifests, apply-argocd]
+    if: always() && inputs.action == 'apply'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "# 🎉 Bootstrap Complete: voting01" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Status" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Terraform | ${{ needs.terraform.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ECR Repos | ${{ needs.create-ecr.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Manifests | ${{ needs.update-manifests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ArgoCD | ${{ needs.apply-argocd.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Run CI workflow: \`gh workflow run ci-build-push-voting01-dev.yaml\`" >> $GITHUB_STEP_SUMMARY
+          echo "2. Access Vote: https://vote-voting01-dev.agent.opsera.dev" >> $GITHUB_STEP_SUMMARY
+          echo "3. Access Result: https://result-voting01-dev.agent.opsera.dev" >> $GITHUB_STEP_SUMMARY
