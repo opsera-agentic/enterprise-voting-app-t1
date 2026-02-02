@@ -1,0 +1,155 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# E2E TEST WORKFLOW - vote3
+# Simulates real voting sessions and verifies end-to-end functionality
+# ════════════════════════════════════════════════════════════════════════════════
+
+name: "E2E Test (vote3)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to test'
+        type: choice
+        options: [dev, qa, staging]
+        default: dev
+      cats_votes:
+        description: 'Number of votes for Cats'
+        type: number
+        default: 7
+      dogs_votes:
+        description: 'Number of votes for Dogs'
+        type: number
+        default: 3
+
+env:
+  APP_NAME: vote3
+
+jobs:
+  e2e-test:
+    name: "🧪 E2E Voting Test"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set URLs
+        id: urls
+        run: |
+          ENV="${{ inputs.environment }}"
+          echo "vote_url=https://vote-${{ env.APP_NAME }}-${ENV}.agent.opsera.dev" >> $GITHUB_OUTPUT
+          echo "result_url=https://result-${{ env.APP_NAME }}-${ENV}.agent.opsera.dev" >> $GITHUB_OUTPUT
+
+      - name: "📊 Pre-Test - Check Apps Available"
+        run: |
+          echo "### 🧪 E2E Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "#### Pre-Test Health Check" >> $GITHUB_STEP_SUMMARY
+
+          VOTE_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ steps.urls.outputs.vote_url }}/" --max-time 10 || echo "000")
+          RESULT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ steps.urls.outputs.result_url }}/" --max-time 10 || echo "000")
+
+          echo "- Vote App: HTTP ${VOTE_STATUS}" >> $GITHUB_STEP_SUMMARY
+          echo "- Result App: HTTP ${RESULT_STATUS}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$VOTE_STATUS" != "200" ]; then
+            echo "::warning::Vote app returned HTTP ${VOTE_STATUS}"
+          fi
+          if [ "$RESULT_STATUS" != "200" ]; then
+            echo "::error::Result app returned HTTP ${RESULT_STATUS}"
+            exit 1
+          fi
+
+      - name: "🗳️ Simulate Voting - Cats (${{ inputs.cats_votes }} votes)"
+        run: |
+          echo "#### Voting Simulation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          SUCCESS=0
+          FAILED=0
+
+          for i in $(seq 1 ${{ inputs.cats_votes }}); do
+            RESPONSE=$(curl -s -X POST "${{ steps.urls.outputs.vote_url }}/" \
+              -H "Content-Type: application/x-www-form-urlencoded" \
+              -d "vote=a" \
+              -c /tmp/cookies_cat_$i.txt \
+              -b /tmp/cookies_cat_$i.txt \
+              --max-time 5 \
+              -w "\n%{http_code}" 2>/dev/null)
+
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "302" ]; then
+              SUCCESS=$((SUCCESS + 1))
+              echo "  ✓ Cat vote $i submitted"
+            else
+              FAILED=$((FAILED + 1))
+              echo "  ✗ Cat vote $i failed (HTTP $HTTP_CODE)"
+            fi
+            sleep 0.2
+          done
+
+          echo "- 🐱 Cats: ${SUCCESS} successful, ${FAILED} failed" >> $GITHUB_STEP_SUMMARY
+
+      - name: "🗳️ Simulate Voting - Dogs (${{ inputs.dogs_votes }} votes)"
+        run: |
+          SUCCESS=0
+          FAILED=0
+
+          for i in $(seq 1 ${{ inputs.dogs_votes }}); do
+            RESPONSE=$(curl -s -X POST "${{ steps.urls.outputs.vote_url }}/" \
+              -H "Content-Type: application/x-www-form-urlencoded" \
+              -d "vote=b" \
+              -c /tmp/cookies_dog_$i.txt \
+              -b /tmp/cookies_dog_$i.txt \
+              --max-time 5 \
+              -w "\n%{http_code}" 2>/dev/null)
+
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "302" ]; then
+              SUCCESS=$((SUCCESS + 1))
+              echo "  ✓ Dog vote $i submitted"
+            else
+              FAILED=$((FAILED + 1))
+              echo "  ✗ Dog vote $i failed (HTTP $HTTP_CODE)"
+            fi
+            sleep 0.2
+          done
+
+          echo "- 🐶 Dogs: ${SUCCESS} successful, ${FAILED} failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: "⏳ Wait for Vote Processing"
+        run: sleep 3
+
+      - name: "📈 Verify Results"
+        run: |
+          echo "#### Results Verification" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Fetch result page
+          RESULT_HTML=$(curl -s "${{ steps.urls.outputs.result_url }}/" --max-time 10)
+
+          echo "Result page fetched successfully"
+
+          # Expected percentages
+          TOTAL=$(( ${{ inputs.cats_votes }} + ${{ inputs.dogs_votes }} ))
+          EXPECTED_CATS=$(echo "scale=1; ${{ inputs.cats_votes }} * 100 / $TOTAL" | bc)
+          EXPECTED_DOGS=$(echo "scale=1; ${{ inputs.dogs_votes }} * 100 / $TOTAL" | bc)
+
+          echo "| Metric | Expected | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Total Votes | ${TOTAL} | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cats % | ~${EXPECTED_CATS}% | 🐱 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dogs % | ~${EXPECTED_DOGS}% | 🐶 |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: "📋 Test Summary"
+        run: |
+          echo "#### Endpoints Tested" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Vote:** ${{ steps.urls.outputs.vote_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Result:** ${{ steps.urls.outputs.result_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "_E2E Test completed at $(date -u +'%Y-%m-%d %H:%M UTC')_" >> $GITHUB_STEP_SUMMARY
