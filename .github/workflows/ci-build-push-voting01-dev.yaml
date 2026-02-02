@@ -193,6 +193,7 @@ jobs:
   deploy:
     name: "🚀 Deploy"
     needs: [build]
+    if: always() && needs.build.result == 'success'
     runs-on: ${{ github.event.inputs.runner == 'github-hosted' && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "opsera"]') }}
     outputs:
       success: ${{ steps.verify.outputs.success }}
