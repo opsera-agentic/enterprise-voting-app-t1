@@ -46,3 +46,9 @@ jobs:
         run: |
           echo "=== WORKER ENV ==="
           kubectl exec -n ${{ env.APP_NAME }}-${{ env.ENVIRONMENT }} deploy/worker -- env | grep -E "(DATABASE|AWS|REDIS)" || echo "Could not get env"
+
+      - name: Restart Result Pod
+        run: |
+          echo "Restarting Result deployment..."
+          kubectl rollout restart deployment/result -n ${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}
+          kubectl rollout status deployment/result -n ${{ env.APP_NAME }}-${{ env.ENVIRONMENT }} --timeout=60s
