@@ -13,6 +13,15 @@ on:
         type: choice
         options: ['security-vulnerability', 'deployment-failure', 'test-ticket']
         default: 'test-ticket'
+      jira_url_override:
+        description: 'Override JIRA_BASE_URL (leave empty to use secret)'
+        type: string
+        default: ''
+      api_version:
+        description: 'Jira API version'
+        type: choice
+        options: ['2', '3']
+        default: '2'
 
 jobs:
   test-jira:
@@ -65,24 +74,35 @@ jobs:
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_BASE_URL_SECRET: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_URL_OVERRIDE: ${{ github.event.inputs.jira_url_override }}
+          API_VERSION: ${{ github.event.inputs.api_version }}
         run: |
+          # Use override URL if provided, otherwise use secret
+          if [ -n "$JIRA_URL_OVERRIDE" ]; then
+            JIRA_BASE_URL="$JIRA_URL_OVERRIDE"
+            echo "🔧 Using override URL" >> $GITHUB_STEP_SUMMARY
+          else
+            JIRA_BASE_URL="$JIRA_BASE_URL_SECRET"
+          fi
+
           echo "### 🔌 Testing Jira API Connection" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Show masked URL format for debugging
-          URL_DOMAIN=$(echo "$JIRA_BASE_URL" | sed 's|https://||' | sed 's|http://||' | cut -d'/' -f1)
-          echo "**Target:** \`https://${URL_DOMAIN}/...\`" >> $GITHUB_STEP_SUMMARY
+          # Show URL for debugging
+          echo "**Target:** \`${JIRA_BASE_URL}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**API Version:** \`${API_VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Email:** \`${JIRA_EMAIL}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Test API connection by getting server info
-          echo "Making API call to ${JIRA_BASE_URL}/rest/api/3/serverInfo"
+          # Test API connection - try project list (more reliable for mock)
+          API_URL="${JIRA_BASE_URL}/rest/api/${API_VERSION}/project"
+          echo "Making API call to ${API_URL}"
 
           RESPONSE=$(curl -s -w "\n%{http_code}" \
             -H "Authorization: Basic $(echo -n "${JIRA_EMAIL}:${JIRA_API_TOKEN}" | base64)" \
             -H "Content-Type: application/json" \
-            "${JIRA_BASE_URL}/rest/api/3/serverInfo" 2>&1)
+            "${API_URL}" 2>&1)
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
           BODY=$(echo "$RESPONSE" | sed '$d')
@@ -94,10 +114,10 @@ jobs:
 
           if [ "$HTTP_CODE" = "200" ]; then
             echo "✅ **API Connection:** Success (HTTP $HTTP_CODE)" >> $GITHUB_STEP_SUMMARY
-            SERVER_TITLE=$(echo "$BODY" | jq -r '.serverTitle // "Unknown"')
-            VERSION=$(echo "$BODY" | jq -r '.version // "Unknown"')
-            echo "- Server: $SERVER_TITLE" >> $GITHUB_STEP_SUMMARY
-            echo "- Version: $VERSION" >> $GITHUB_STEP_SUMMARY
+            PROJECT_COUNT=$(echo "$BODY" | jq 'length' 2>/dev/null || echo "0")
+            echo "- Projects found: $PROJECT_COUNT" >> $GITHUB_STEP_SUMMARY
+            # Export for next steps
+            echo "JIRA_BASE_URL=${JIRA_BASE_URL}" >> $GITHUB_ENV
           else
             echo "❌ **API Connection:** Failed (HTTP $HTTP_CODE)" >> $GITHUB_STEP_SUMMARY
             echo "Response: $BODY" >> $GITHUB_STEP_SUMMARY
@@ -110,7 +130,7 @@ jobs:
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          API_VERSION: ${{ github.event.inputs.api_version }}
         run: |
           echo "### 📁 Available Jira Projects" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -118,11 +138,11 @@ jobs:
           RESPONSE=$(curl -s \
             -H "Authorization: Basic $(echo -n "${JIRA_EMAIL}:${JIRA_API_TOKEN}" | base64)" \
             -H "Content-Type: application/json" \
-            "${JIRA_BASE_URL}/rest/api/3/project")
+            "${JIRA_BASE_URL}/rest/api/${API_VERSION}/project")
 
           echo "| Key | Name |" >> $GITHUB_STEP_SUMMARY
           echo "|-----|------|" >> $GITHUB_STEP_SUMMARY
-          echo "$RESPONSE" | jq -r '.[] | "| \(.key) | \(.name) |"' >> $GITHUB_STEP_SUMMARY
+          echo "$RESPONSE" | jq -r '.[] | "| \(.key) | \(.name) |"' >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "| - | No projects found |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           # Save first project key for testing
@@ -135,7 +155,7 @@ jobs:
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          API_VERSION: ${{ github.event.inputs.api_version }}
         run: |
           echo "### 📝 Creating Test Jira Ticket" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -146,32 +166,37 @@ jobs:
           case "$TEST_TYPE" in
             "security-vulnerability")
               SUMMARY="[TEST-SECURITY] voting01-dev: 3 Critical, 5 High vulnerabilities"
-              DESCRIPTION="Test security vulnerability ticket from CI/CD pipeline.\\n\\nThis is a test to verify Jira integration for security scan findings.\\n\\n*Test Details:*\\n- Timestamp: ${TIMESTAMP}\\n- Workflow: ${{ github.workflow }}\\n- Run ID: ${{ github.run_id }}"
-              LABELS='["security-vulnerability", "test", "grype"]'
+              DESCRIPTION="Test security vulnerability ticket from CI/CD pipeline.\n\nThis is a test to verify Jira integration for security scan findings.\n\nTest Details:\n- Timestamp: ${TIMESTAMP}\n- Workflow: ${{ github.workflow }}\n- Run ID: ${{ github.run_id }}\n- GitHub: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               PRIORITY="High"
               ;;
             "deployment-failure")
               SUMMARY="[TEST-DEPLOY] voting01-dev Deployment Failed"
-              DESCRIPTION="Test deployment failure ticket from CI/CD pipeline.\\n\\nThis is a test to verify Jira integration for deployment failures.\\n\\n*Test Details:*\\n- Timestamp: ${TIMESTAMP}\\n- Workflow: ${{ github.workflow }}\\n- Run ID: ${{ github.run_id }}"
-              LABELS='["deployment-failure", "test", "voting01"]'
+              DESCRIPTION="Test deployment failure ticket from CI/CD pipeline.\n\nThis is a test to verify Jira integration for deployment failures.\n\nTest Details:\n- Timestamp: ${TIMESTAMP}\n- Workflow: ${{ github.workflow }}\n- Run ID: ${{ github.run_id }}\n- GitHub: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               PRIORITY="High"
               ;;
             *)
               SUMMARY="[TEST] Jira Integration Test - ${TIMESTAMP}"
-              DESCRIPTION="Test ticket to verify Jira integration is working correctly.\\n\\n*Test Details:*\\n- Timestamp: ${TIMESTAMP}\\n- Triggered by: ${{ github.actor }}\\n- Workflow: ${{ github.workflow }}\\n- Run ID: ${{ github.run_id }}\\n- Repository: ${{ github.repository }}"
-              LABELS='["test", "ci-cd-integration"]'
-              PRIORITY="Low"
+              DESCRIPTION="Test ticket to verify Jira integration is working correctly.\n\nTest Details:\n- Timestamp: ${TIMESTAMP}\n- Triggered by: ${{ github.actor }}\n- Workflow: ${{ github.workflow }}\n- Run ID: ${{ github.run_id }}\n- Repository: ${{ github.repository }}\n- GitHub: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              PRIORITY="Medium"
               ;;
           esac
 
           # Try DEPLOY project first, fallback to first available
           PROJECT_KEY="DEPLOY"
 
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            -H "Authorization: Basic $(echo -n "${JIRA_EMAIL}:${JIRA_API_TOKEN}" | base64)" \
-            -H "Content-Type: application/json" \
-            "${JIRA_BASE_URL}/rest/api/3/issue" \
-            -d "{
+          # API v2 uses plain text description, v3 uses ADF format
+          if [ "$API_VERSION" = "2" ]; then
+            PAYLOAD="{
+              \"fields\": {
+                \"project\": {\"key\": \"${PROJECT_KEY}\"},
+                \"summary\": \"${SUMMARY}\",
+                \"description\": \"${DESCRIPTION}\",
+                \"issuetype\": {\"name\": \"Task\"},
+                \"priority\": {\"name\": \"${PRIORITY}\"}
+              }
+            }"
+          else
+            PAYLOAD="{
               \"fields\": {
                 \"project\": {\"key\": \"${PROJECT_KEY}\"},
                 \"summary\": \"${SUMMARY}\",
@@ -184,21 +209,22 @@ jobs:
                       \"content\": [
                         {\"type\": \"text\", \"text\": \"${DESCRIPTION}\"}
                       ]
-                    },
-                    {
-                      \"type\": \"paragraph\",
-                      \"content\": [
-                        {\"type\": \"text\", \"text\": \"Workflow Run: \"},
-                        {\"type\": \"text\", \"text\": \"View in GitHub\", \"marks\": [{\"type\": \"link\", \"attrs\": {\"href\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}}]}
-                      ]
                     }
                   ]
                 },
                 \"issuetype\": {\"name\": \"Bug\"},
-                \"priority\": {\"name\": \"${PRIORITY}\"},
-                \"labels\": ${LABELS}
+                \"priority\": {\"name\": \"${PRIORITY}\"}
               }
-            }")
+            }"
+          fi
+
+          echo "Creating ticket with API v${API_VERSION}..."
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: Basic $(echo -n "${JIRA_EMAIL}:${JIRA_API_TOKEN}" | base64)" \
+            -H "Content-Type: application/json" \
+            "${JIRA_BASE_URL}/rest/api/${API_VERSION}/issue" \
+            -d "$PAYLOAD")
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
           BODY=$(echo "$RESPONSE" | sed '$d')
