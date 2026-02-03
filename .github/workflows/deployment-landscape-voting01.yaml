@@ -79,8 +79,16 @@ jobs:
                 SOURCE_SHA=$(echo "$MSG" | cut -d'-' -f1)
 
                 # Look up the actual author of the source commit
-                # This shows who made the code change, not github-actions[bot]
+                # If it's a bot commit, find the last human author
                 AUTHOR=$(git log -1 --format="%an" "$SOURCE_SHA" 2>/dev/null || echo "Unknown")
+
+                # If author is a bot, find the last non-bot commit author
+                if [ "$AUTHOR" = "github-actions[bot]" ] || [ "$AUTHOR" = "GitHub Actions" ]; then
+                  # Find the last commit by a human (not bot) before or at this SHA
+                  AUTHOR=$(git log --format="%an" "$SOURCE_SHA" 2>/dev/null | grep -v -E "github-actions|GitHub Actions|\[bot\]" | head -1)
+                  [ -z "$AUTHOR" ] && AUTHOR=$(git log --format="%an" -10 2>/dev/null | grep -v -E "github-actions|GitHub Actions|\[bot\]" | head -1)
+                  [ -z "$AUTHOR" ] && AUTHOR="Unknown"
+                fi
 
                 echo "${SHORT_SHA}~${MSG}~${TIMESTAMP}~${AUTHOR}"
               fi
