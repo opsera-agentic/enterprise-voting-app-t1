@@ -16,8 +16,8 @@ on:
       runner:
         description: 'Runner type'
         type: choice
-        options: ['self-hosted', 'github-hosted']
-        default: 'self-hosted'
+        options: ['github-hosted', 'self-hosted']
+        default: 'github-hosted'
 
 env:
   APP_NAME: voting01
@@ -36,7 +36,7 @@ jobs:
 
   deploy:
     name: "🚀 Deploy Staging (Blue-Green)"
-    runs-on: ${{ github.event.inputs.runner == 'github-hosted' && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "opsera"]') }}
+    runs-on: ${{ github.event.inputs.runner == 'self-hosted' && fromJSON('["self-hosted", "linux", "opsera"]') || 'ubuntu-latest' }}
     outputs:
       success: ${{ steps.verify.outputs.success }}
     steps:
@@ -141,7 +141,7 @@ jobs:
     name: "📢 Slack"
     needs: [deploy]
     if: always()
-    runs-on: ${{ github.event.inputs.runner == 'github-hosted' && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "opsera"]') }}
+    runs-on: ${{ github.event.inputs.runner == 'self-hosted' && fromJSON('["self-hosted", "linux", "opsera"]') || 'ubuntu-latest' }}
     steps:
       - name: Determine Status
         id: status
@@ -196,7 +196,7 @@ jobs:
     name: "📋 Jira"
     needs: [deploy]
     if: always() && needs.deploy.outputs.success == 'false'
-    runs-on: ${{ github.event.inputs.runner == 'github-hosted' && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "opsera"]') }}
+    runs-on: ${{ github.event.inputs.runner == 'self-hosted' && fromJSON('["self-hosted", "linux", "opsera"]') || 'ubuntu-latest' }}
     continue-on-error: true
     steps:
       - name: Create Jira Issue

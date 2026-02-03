@@ -20,8 +20,8 @@ on:
       runner:
         description: 'Runner type'
         type: choice
-        options: ['self-hosted', 'github-hosted']
-        default: 'self-hosted'
+        options: ['github-hosted', 'self-hosted']
+        default: 'github-hosted'
 
 env:
   APP_NAME: voting01
@@ -33,7 +33,7 @@ env:
 jobs:
   terraform:
     name: "🏗️ Terraform"
-    runs-on: ${{ inputs.runner == 'github-hosted' && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "opsera"]') }}
+    runs-on: ${{ inputs.runner == 'self-hosted' && fromJSON('["self-hosted", "linux", "opsera"]') || 'ubuntu-latest' }}
     if: inputs.skip_terraform != true
     outputs:
       rds_address: ${{ steps.output.outputs.rds_address }}
@@ -95,7 +95,7 @@ jobs:
 
   create-ecr:
     name: "📦 Create ECR Repos"
-    runs-on: ${{ inputs.runner == 'github-hosted' && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "opsera"]') }}
+    runs-on: ${{ inputs.runner == 'self-hosted' && fromJSON('["self-hosted", "linux", "opsera"]') || 'ubuntu-latest' }}
     if: inputs.action == 'apply'
     steps:
       - name: Configure AWS
@@ -118,7 +118,7 @@ jobs:
     name: "📝 Update Manifests"
     needs: [terraform]
     if: always() && (needs.terraform.result == 'success' || inputs.skip_terraform == true) && inputs.action == 'apply'
-    runs-on: ${{ inputs.runner == 'github-hosted' && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "opsera"]') }}
+    runs-on: ${{ inputs.runner == 'self-hosted' && fromJSON('["self-hosted", "linux", "opsera"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -175,7 +175,7 @@ jobs:
     name: "🚀 Apply ArgoCD"
     needs: [update-manifests, create-ecr]
     if: always() && needs.update-manifests.result == 'success' && inputs.action == 'apply'
-    runs-on: ${{ inputs.runner == 'github-hosted' && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "opsera"]') }}
+    runs-on: ${{ inputs.runner == 'self-hosted' && fromJSON('["self-hosted", "linux", "opsera"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -223,7 +223,7 @@ jobs:
     name: "📊 Summary"
     needs: [terraform, create-ecr, update-manifests, apply-argocd]
     if: always() && inputs.action == 'apply'
-    runs-on: ${{ inputs.runner == 'github-hosted' && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "opsera"]') }}
+    runs-on: ${{ inputs.runner == 'self-hosted' && fromJSON('["self-hosted", "linux", "opsera"]') || 'ubuntu-latest' }}
     steps:
       - name: Generate Summary
         run: |
