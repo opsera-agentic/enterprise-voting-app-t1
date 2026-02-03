@@ -63,6 +63,7 @@ jobs:
         id: history
         run: |
           # Function to get deployment history for an environment
+          # Uses ~ as field separator (single char) and ; as record separator
           get_history() {
             local env=$1
             git log --oneline --grep="deploy(voting01-${env}):" --format="%H|%s|%ci" -n 5 2>/dev/null | while read line; do
@@ -71,9 +72,9 @@ jobs:
                 SHORT_SHA=$(echo "$SHA" | cut -c1-7)
                 MSG=$(echo "$line" | cut -d'|' -f2 | sed 's/deploy(voting01-'${env}'): //' | sed 's/ \[skip ci\]//')
                 DATE=$(echo "$line" | cut -d'|' -f3 | cut -d' ' -f1,2)
-                echo "${SHORT_SHA}::${MSG}::${DATE}"
+                echo "${SHORT_SHA}~${MSG}~${DATE}"
               fi
-            done | tr '\n' ';;' | sed 's/;;$//'
+            done | tr '\n' ';' | sed 's/;$//'
           }
 
           DEV_HIST=$(get_history "dev")
@@ -378,7 +379,11 @@ jobs:
           STG_HIST: ${{ needs.collect-data.outputs.staging_history }}
           REPO_URL: https://github.com/${{ env.GITHUB_REPO }}
         run: |
+          echo "## 📜 Deployment History (Last 5)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
           # Function to render deployment history table
+          # Uses ~ as field separator and ; as record separator
           render_history() {
             local env_name=$1
             local env_icon=$2
@@ -392,11 +397,12 @@ jobs:
               echo "| - | No deployments found | - | - |" >> $GITHUB_STEP_SUMMARY
             else
               count=1
-              echo "$history" | tr ';;' '\n' | while read entry; do
+              IFS=';' read -ra ENTRIES <<< "$history"
+              for entry in "${ENTRIES[@]}"; do
                 if [ -n "$entry" ]; then
-                  SHA=$(echo "$entry" | cut -d'::' -f1)
-                  TAG=$(echo "$entry" | cut -d'::' -f2)
-                  DATE=$(echo "$entry" | cut -d'::' -f3)
+                  SHA=$(echo "$entry" | cut -d'~' -f1)
+                  TAG=$(echo "$entry" | cut -d'~' -f2)
+                  DATE=$(echo "$entry" | cut -d'~' -f3)
                   echo "| ${count} | [\`${SHA}\`](${REPO_URL}/commit/${SHA}) | \`${TAG}\` | ${DATE} |" >> $GITHUB_STEP_SUMMARY
                   count=$((count + 1))
                 fi
@@ -404,9 +410,6 @@ jobs:
             fi
             echo "" >> $GITHUB_STEP_SUMMARY
           }
-
-          echo "## 📜 Deployment History (Last 5)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
 
           render_history "DEV" "🔧" "$DEV_HIST"
           render_history "QA" "🧪" "$QA_HIST"
