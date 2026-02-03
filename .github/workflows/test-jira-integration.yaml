@@ -130,9 +130,12 @@ jobs:
             echo "✅ **API Connection:** Success (HTTP $HTTP_CODE)" >> $GITHUB_STEP_SUMMARY
             PROJECT_COUNT=$(echo "$BODY" | jq 'length' 2>/dev/null || echo "0")
             echo "- Projects found: $PROJECT_COUNT" >> $GITHUB_STEP_SUMMARY
+            # Get first project key
+            FIRST_PROJECT=$(echo "$BODY" | jq -r '.[0].key // "TEST"')
+            echo "- First project: $FIRST_PROJECT" >> $GITHUB_STEP_SUMMARY
             # Export for next steps
             echo "JIRA_BASE_URL=${JIRA_BASE_URL}" >> $GITHUB_ENV
-            echo "AUTH_HEADER=${AUTH_HEADER}" >> $GITHUB_ENV
+            echo "FIRST_PROJECT=${FIRST_PROJECT}" >> $GITHUB_ENV
           else
             echo "❌ **API Connection:** Failed (HTTP $HTTP_CODE)" >> $GITHUB_STEP_SUMMARY
             echo "Response: $BODY" >> $GITHUB_STEP_SUMMARY
@@ -143,10 +146,20 @@ jobs:
       - name: List Available Projects
         if: steps.check-jira.outputs.configured == 'true'
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           API_VERSION: ${{ github.event.inputs.api_version }}
+          AUTH_TYPE: ${{ github.event.inputs.auth_type }}
         run: |
           echo "### 📁 Available Jira Projects" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Build auth header
+          if [ "$AUTH_TYPE" = "api-key" ]; then
+            AUTH_HEADER="X-API-Key: ${JIRA_API_TOKEN}"
+          else
+            AUTH_HEADER="Authorization: Basic $(echo -n "${JIRA_EMAIL}:${JIRA_API_TOKEN}" | base64)"
+          fi
 
           RESPONSE=$(curl -s \
             -H "${AUTH_HEADER}" \
@@ -158,18 +171,24 @@ jobs:
           echo "$RESPONSE" | jq -r '.[] | "| \(.key) | \(.name) |"' >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "| - | No projects found |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Save first project key for testing
-          FIRST_PROJECT=$(echo "$RESPONSE" | jq -r '.[0].key // "DEPLOY"')
-          echo "first_project=${FIRST_PROJECT}" >> $GITHUB_OUTPUT
-
       - name: Create Test Jira Ticket
         if: steps.check-jira.outputs.configured == 'true'
         id: create-ticket
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           API_VERSION: ${{ github.event.inputs.api_version }}
+          AUTH_TYPE: ${{ github.event.inputs.auth_type }}
         run: |
           echo "### 📝 Creating Test Jira Ticket" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Build auth header
+          if [ "$AUTH_TYPE" = "api-key" ]; then
+            AUTH_HEADER="X-API-Key: ${JIRA_API_TOKEN}"
+          else
+            AUTH_HEADER="Authorization: Basic $(echo -n "${JIRA_EMAIL}:${JIRA_API_TOKEN}" | base64)"
+          fi
 
           TEST_TYPE="${{ github.event.inputs.test_type }}"
           TIMESTAMP=$(date -u +'%Y-%m-%d %H:%M UTC')
@@ -192,8 +211,9 @@ jobs:
               ;;
           esac
 
-          # Try DEPLOY project first, fallback to first available
-          PROJECT_KEY="DEPLOY"
+          # Use discovered project key from connection test, fallback to TEST
+          PROJECT_KEY="${FIRST_PROJECT:-TEST}"
+          echo "**Project:** \`${PROJECT_KEY}\`" >> $GITHUB_STEP_SUMMARY
 
           # API v2 uses plain text description, v3 uses ADF format
           if [ "$API_VERSION" = "2" ]; then
