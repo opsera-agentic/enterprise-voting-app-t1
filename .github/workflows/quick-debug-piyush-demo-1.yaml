@@ -25,6 +25,25 @@ jobs:
           curl -LO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl"
           chmod +x kubectl && sudo mv kubectl /usr/local/bin/
 
+      - name: Check ArgoCD Application
+        run: |
+          aws eks update-kubeconfig --name argocd-usw2 --region ${{ env.AWS_REGION }}
+          
+          echo "=== ArgoCD Application Status ==="
+          kubectl get application ${{ env.APP_NAME }}-dev -n argocd -o yaml || echo "Application not found"
+          
+          echo ""
+          echo "=== ArgoCD App Conditions ==="
+          kubectl get application ${{ env.APP_NAME }}-dev -n argocd -o jsonpath='{.status.conditions}' || true
+          
+          echo ""
+          echo "=== ArgoCD Sync Status ==="
+          kubectl get application ${{ env.APP_NAME }}-dev -n argocd -o jsonpath='{.status.sync}' || true
+          
+          echo ""
+          echo "=== ArgoCD Health Status ==="
+          kubectl get application ${{ env.APP_NAME }}-dev -n argocd -o jsonpath='{.status.health}' || true
+
       - name: Debug Cluster State
         run: |
           aws eks update-kubeconfig --name ${{ env.SPOKE_CLUSTER }} --region ${{ env.AWS_REGION }}
