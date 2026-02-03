@@ -1,3 +1,9 @@
+// New Relic APM - MUST be first require
+if (process.env.NEW_RELIC_LICENSE_KEY) {
+  require('newrelic');
+  console.log('New Relic APM initialized');
+}
+
 var express = require('express'),
     async = require('async'),
     { Pool } = require('pg'),

@@ -29,4 +29,5 @@ COPY . .
 EXPOSE 80
 
 # Define our command to be run when launching the container
-CMD ["gunicorn", "app:app", "-b", "0.0.0.0:80", "--log-file", "-", "--access-logfile", "-", "--workers", "4", "--keep-alive", "0"]
+# Use newrelic-admin to wrap gunicorn for APM monitoring
+CMD ["newrelic-admin", "run-program", "gunicorn", "app:app", "-b", "0.0.0.0:80", "--log-file", "-", "--access-logfile", "-", "--workers", "4", "--keep-alive", "0"]

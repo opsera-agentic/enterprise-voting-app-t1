@@ -13,4 +13,5 @@ resources:
   - result-service.yaml
   - worker-deployment.yaml
   - ingress.yaml
+  - newrelic-secret.yaml
 # ConfigMap and ServiceAccounts are in overlays (environment-specific)

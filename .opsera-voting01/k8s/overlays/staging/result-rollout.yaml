@@ -28,6 +28,9 @@ spec:
           envFrom:
             - configMapRef:
                 name: voting01-config
+            - secretRef:
+                name: newrelic-license
+                optional: true
           resources:
             requests:
               cpu: 100m
