@@ -28,11 +28,11 @@ button i{
 }
 
 button.a{
-  background-color: #e53935;
+  background-color: #FF6B00;
 }
 
 button.b{
-  background-color: #8e44ad;
+  background-color: #9C27B0;
 }
 
 #tip{
@@ -112,19 +112,19 @@ button.b{
 }
 
 #choice button.a:hover{
-  background-color: #c62828;
+  background-color: #E65100;
 }
 
 #choice button.b:hover{
-  background-color: #6c3483;
+  background-color: #7B1FA2;
 }
 
 #choice button.a:focus{
-  background-color: #c62828;
+  background-color: #E65100;
 }
 
 #choice button.b:focus{
-  background-color: #6c3483;
+  background-color: #7B1FA2;
 }
 
 #background-stats{
