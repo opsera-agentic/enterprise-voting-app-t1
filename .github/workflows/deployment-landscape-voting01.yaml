@@ -19,7 +19,7 @@ env:
   AWS_REGION: us-west-2
   HUB_CLUSTER: argocd-usw2
   SPOKE_CLUSTER: opsera-usw2-np
-  GITHUB_REPO: opsera-agent-demos/enterprise-voting-app-t1
+  GITHUB_REPO: opsera-agentic/enterprise-voting-demo-only
 
 jobs:
   # ═══════════════════════════════════════════════════════════════════════════════
@@ -178,6 +178,7 @@ jobs:
           DEV_H: ${{ needs.collect-metrics.outputs.dev_health }}
           QA_H: ${{ needs.collect-metrics.outputs.qa_health }}
           STG_H: ${{ needs.collect-metrics.outputs.staging_health }}
+          REPO_URL: https://github.com/${{ env.GITHUB_REPO }}
         run: |
           health_icon() {
             case "$1" in
@@ -187,13 +188,24 @@ jobs:
             esac
           }
 
+          # Extract commit SHA from version (format: commitsha-timestamp)
+          version_link() {
+            local version=$1
+            if [ "$version" != "unknown" ] && [ -n "$version" ]; then
+              local sha=$(echo "$version" | cut -d'-' -f1)
+              echo "[\`${version}\`](${REPO_URL}/commit/${sha})"
+            else
+              echo "\`${version}\`"
+            fi
+          }
+
           echo "## 🌍 Environment Status" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Environment | Version | Pods | Health | Strategy |" >> $GITHUB_STEP_SUMMARY
           echo "|-------------|---------|------|--------|----------|" >> $GITHUB_STEP_SUMMARY
-          echo "| 🔧 **DEV** | \`${DEV_V}\` | ${DEV_P:-0} | $(health_icon $DEV_H) | Rolling |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🧪 **QA** | \`${QA_V}\` | ${QA_P:-0} | $(health_icon $QA_H) | 🐤 Canary |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🎭 **STAGING** | \`${STG_V}\` | ${STG_P:-0} | $(health_icon $STG_H) | 🔵🟢 Blue-Green |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔧 **DEV** | $(version_link "$DEV_V") | ${DEV_P:-0} | $(health_icon $DEV_H) | Rolling |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🧪 **QA** | $(version_link "$QA_V") | ${QA_P:-0} | $(health_icon $QA_H) | 🐤 Canary |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🎭 **STAGING** | $(version_link "$STG_V") | ${STG_P:-0} | $(health_icon $STG_H) | 🔵🟢 Blue-Green |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
       - name: Quick Links
