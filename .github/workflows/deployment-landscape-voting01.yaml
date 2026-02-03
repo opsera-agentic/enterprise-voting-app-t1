@@ -132,10 +132,49 @@ jobs:
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
 
-      - name: Architecture Diagram
+      - name: Application Architecture
+        run: |
+          REPO="https://github.com/${{ env.GITHUB_REPO }}"
+          cat << EOF >> \$GITHUB_STEP_SUMMARY
+          ## 🗳️ Application Architecture
+
+          \`\`\`mermaid
+          flowchart TB
+              subgraph FRONTEND["Frontend Layer"]
+                  VOTE["🗳️ Vote<br/>Python Flask<br/>Port 80"]
+                  RESULT["📊 Result<br/>Node.js + Socket.io<br/>Port 80"]
+              end
+
+              subgraph BACKEND["Backend Layer"]
+                  WORKER["⚙️ Worker<br/>.NET Core<br/>Background Process"]
+              end
+
+              subgraph DATA["Data Layer"]
+                  REDIS[("🔴 Redis<br/>Vote Queue<br/>ElastiCache")]
+                  POSTGRES[("🐘 PostgreSQL<br/>Vote Storage<br/>RDS")]
+              end
+
+              USER((👤 User)) --> VOTE
+              USER --> RESULT
+              VOTE -->|"Submit Vote"| REDIS
+              WORKER -->|"Read Votes"| REDIS
+              WORKER -->|"Persist Votes"| POSTGRES
+              RESULT -->|"Query Results"| POSTGRES
+          \`\`\`
+
+          ### Service Details
+          | Service | Language | Source | Dockerfile | Purpose |
+          |---------|----------|--------|------------|---------|
+          | 🗳️ Vote | Python 3.9 | [vote/](${REPO}/tree/main/vote) | [Dockerfile.vote](${REPO}/blob/main/.opsera-voting01/Dockerfiles/Dockerfile.vote) | Web UI for casting votes |
+          | 📊 Result | Node.js 18 | [result/](${REPO}/tree/main/result) | [Dockerfile.result](${REPO}/blob/main/.opsera-voting01/Dockerfiles/Dockerfile.result) | Real-time results dashboard |
+          | ⚙️ Worker | .NET 7 | [worker/](${REPO}/tree/main/worker) | [Dockerfile.worker](${REPO}/blob/main/.opsera-voting01/Dockerfiles/Dockerfile.worker) | Background vote processor |
+
+          EOF
+
+      - name: Infrastructure Architecture
         run: |
           cat << 'EOF' >> $GITHUB_STEP_SUMMARY
-          ## 🏗️ Architecture
+          ## 🏗️ Infrastructure Architecture
 
           ```mermaid
           flowchart LR
@@ -164,6 +203,98 @@ jobs:
               SPOKE --> DEV & QA & STG
               DEV & QA & STG --> NR
           ```
+
+          EOF
+
+      - name: CI/CD Pipeline Flow
+        run: |
+          REPO="https://github.com/${{ env.GITHUB_REPO }}"
+          cat << EOF >> \$GITHUB_STEP_SUMMARY
+          ## 🔄 CI/CD Pipeline Flow
+
+          ### DEV Pipeline (Auto-trigger on push)
+          \`\`\`mermaid
+          flowchart LR
+              subgraph TRIGGER["Trigger"]
+                  PUSH["📥 Push to main"]
+              end
+
+              subgraph SCAN["Security & Quality"]
+                  SEC["🔒 Gitleaks<br/>Secret Scan"]
+                  SONAR["📊 SonarQube<br/>Code Quality"]
+              end
+
+              subgraph BUILD["Build & Scan"]
+                  B1["🏗️ Build Vote"]
+                  B2["🏗️ Build Result"]
+                  B3["🏗️ Build Worker"]
+                  G1["🛡️ Grype Scan"]
+              end
+
+              subgraph DEPLOY["Deploy"]
+                  ECR["📦 Push ECR"]
+                  KUST["📝 Update Kustomize"]
+                  ARGO["🔄 ArgoCD Sync"]
+              end
+
+              subgraph NOTIFY["Notifications"]
+                  SLACK["📢 Slack"]
+                  JIRA["📋 Jira"]
+              end
+
+              PUSH --> SEC & SONAR
+              SEC & SONAR --> B1 & B2 & B3
+              B1 & B2 & B3 --> G1
+              G1 --> ECR --> KUST --> ARGO
+              ARGO --> SLACK & JIRA
+          \`\`\`
+
+          ### Environment Promotion
+          \`\`\`mermaid
+          flowchart LR
+              subgraph DEV["🔧 DEV Environment"]
+                  D1["CI Build DEV"]
+                  D2["Rolling Deploy"]
+              end
+
+              subgraph QA["🧪 QA Environment"]
+                  Q1["CI Build QA"]
+                  Q2["🐤 Canary Deploy<br/>10% → 30% → 60% → 100%"]
+                  Q3["APM Analysis"]
+              end
+
+              subgraph STG["🎭 Staging Environment"]
+                  S1["CI Build Staging"]
+                  S2["🔵🟢 Blue-Green<br/>Preview URL"]
+                  S3["Traffic Switch"]
+              end
+
+              D1 --> D2
+              D2 -->|"Manual Promote"| Q1
+              Q1 --> Q2 --> Q3
+              Q3 -->|"Approval Gate"| S1
+              S1 --> S2 --> S3
+          \`\`\`
+
+          ### Workflow Files
+          | Pipeline | File | Trigger | Strategy |
+          |----------|------|---------|----------|
+          | DEV CI/CD | [ci-build-push-voting01-dev.yaml](${REPO}/blob/main/.github/workflows/ci-build-push-voting01-dev.yaml) | Push to main | Rolling |
+          | QA CI/CD | [ci-build-push-voting01-qa.yaml](${REPO}/blob/main/.github/workflows/ci-build-push-voting01-qa.yaml) | Manual / Dispatch | Canary |
+          | Staging CI/CD | [ci-build-push-voting01-staging.yaml](${REPO}/blob/main/.github/workflows/ci-build-push-voting01-staging.yaml) | Manual / Dispatch | Blue-Green |
+          | Promotion | [promote-voting01.yaml](${REPO}/blob/main/.github/workflows/promote-voting01.yaml) | Manual | Health Check + Dispatch |
+          | Bootstrap | [00-bootstrap-infrastructure-voting01.yaml](${REPO}/blob/main/.github/workflows/00-bootstrap-infrastructure-voting01.yaml) | Manual | Terraform + ArgoCD |
+          | Landscape | [deployment-landscape-voting01.yaml](${REPO}/blob/main/.github/workflows/deployment-landscape-voting01.yaml) | Schedule / Push | Report Only |
+
+          ### Pipeline Jobs Detail
+          | Job | Purpose | Blocking | Outputs |
+          |-----|---------|----------|---------|
+          | 🔒 Security Scan | Gitleaks secret detection | configurable | - |
+          | 📊 SonarQube | Code quality analysis | configurable | quality_gate_status |
+          | 🏗️ Build & Push | Docker build + Grype scan + ECR push | yes | image_tag, vulnerabilities |
+          | 🚀 Deploy | Kustomize update + ArgoCD sync | yes | success status |
+          | 📢 Slack | Pipeline notifications | no | - |
+          | 📋 Jira | Issue creation on failure | no | issue_key |
 
           EOF
 
@@ -211,37 +342,26 @@ jobs:
       - name: Quick Links
         run: |
           REPO="https://github.com/${{ env.GITHUB_REPO }}"
-          cat << EOF >> $GITHUB_STEP_SUMMARY
+          cat << EOF >> \$GITHUB_STEP_SUMMARY
           ## 🔗 Quick Links
 
-          ### 📂 Source Code
-          | Service | Code | Dockerfile | K8s Base |
-          |---------|------|------------|----------|
-          | 🗳️ Vote | [vote/](${REPO}/tree/main/vote) | [Dockerfile](${REPO}/blob/main/.opsera-voting01/Dockerfiles/Dockerfile.vote) | [deployment](${REPO}/blob/main/.opsera-voting01/k8s/base/vote-deployment.yaml) |
-          | 📊 Result | [result/](${REPO}/tree/main/result) | [Dockerfile](${REPO}/blob/main/.opsera-voting01/Dockerfiles/Dockerfile.result) | [deployment](${REPO}/blob/main/.opsera-voting01/k8s/base/result-deployment.yaml) |
-          | ⚙️ Worker | [worker/](${REPO}/tree/main/worker) | [Dockerfile](${REPO}/blob/main/.opsera-voting01/Dockerfiles/Dockerfile.worker) | [deployment](${REPO}/blob/main/.opsera-voting01/k8s/base/worker-deployment.yaml) |
+          ### 🔧 Kubernetes Manifests
+          | Environment | Kustomization | ConfigMap | Deployment Base |
+          |-------------|---------------|-----------|-----------------|
+          | Base | [k8s/base](${REPO}/tree/main/.opsera-voting01/k8s/base) | - | [vote](${REPO}/blob/main/.opsera-voting01/k8s/base/vote-deployment.yaml) / [result](${REPO}/blob/main/.opsera-voting01/k8s/base/result-deployment.yaml) / [worker](${REPO}/blob/main/.opsera-voting01/k8s/base/worker-deployment.yaml) |
+          | DEV | [overlays/dev](${REPO}/tree/main/.opsera-voting01/k8s/overlays/dev) | [configmap](${REPO}/blob/main/.opsera-voting01/k8s/overlays/dev/configmap.yaml) | [kustomization](${REPO}/blob/main/.opsera-voting01/k8s/overlays/dev/kustomization.yaml) |
+          | QA | [overlays/qa](${REPO}/tree/main/.opsera-voting01/k8s/overlays/qa) | [configmap](${REPO}/blob/main/.opsera-voting01/k8s/overlays/qa/configmap.yaml) | [kustomization](${REPO}/blob/main/.opsera-voting01/k8s/overlays/qa/kustomization.yaml) |
+          | Staging | [overlays/staging](${REPO}/tree/main/.opsera-voting01/k8s/overlays/staging) | [configmap](${REPO}/blob/main/.opsera-voting01/k8s/overlays/staging/configmap.yaml) | [kustomization](${REPO}/blob/main/.opsera-voting01/k8s/overlays/staging/kustomization.yaml) |
 
-          ### 🔧 Environment Configs
-          | Environment | Kustomization | ConfigMap |
-          |-------------|---------------|-----------|
-          | DEV | [overlays/dev](${REPO}/tree/main/.opsera-voting01/k8s/overlays/dev) | [configmap](${REPO}/blob/main/.opsera-voting01/k8s/overlays/dev/configmap.yaml) |
-          | QA | [overlays/qa](${REPO}/tree/main/.opsera-voting01/k8s/overlays/qa) | [configmap](${REPO}/blob/main/.opsera-voting01/k8s/overlays/qa/configmap.yaml) |
-          | Staging | [overlays/staging](${REPO}/tree/main/.opsera-voting01/k8s/overlays/staging) | [configmap](${REPO}/blob/main/.opsera-voting01/k8s/overlays/staging/configmap.yaml) |
-
-          EOF
-
-      - name: CI/CD Workflows
-        run: |
-          REPO="https://github.com/${{ env.GITHUB_REPO }}"
-          cat << EOF >> $GITHUB_STEP_SUMMARY
-          ### ⚙️ CI/CD Workflows
-          | Workflow | Trigger | Actions |
-          |----------|---------|---------|
-          | [CI Build DEV](${REPO}/actions/workflows/ci-build-push-voting01-dev.yaml) | Push to main | [▶️ Run](${REPO}/actions/workflows/ci-build-push-voting01-dev.yaml) |
-          | [CI Build QA](${REPO}/actions/workflows/ci-build-push-voting01-qa.yaml) | Manual | [▶️ Run](${REPO}/actions/workflows/ci-build-push-voting01-qa.yaml) |
-          | [CI Build Staging](${REPO}/actions/workflows/ci-build-push-voting01-staging.yaml) | Manual | [▶️ Run](${REPO}/actions/workflows/ci-build-push-voting01-staging.yaml) |
-          | [Promote](${REPO}/actions/workflows/promote-voting01.yaml) | Manual | [▶️ Run](${REPO}/actions/workflows/promote-voting01.yaml) |
-          | [Diagnostics](${REPO}/actions/workflows/diagnostics-voting01.yaml) | Manual | [▶️ Run](${REPO}/actions/workflows/diagnostics-voting01.yaml) |
+          ### ▶️ Run Workflows
+          | Action | Link |
+          |--------|------|
+          | 🔧 Deploy to DEV | [▶️ Run CI Build DEV](${REPO}/actions/workflows/ci-build-push-voting01-dev.yaml) |
+          | 🧪 Deploy to QA | [▶️ Run CI Build QA](${REPO}/actions/workflows/ci-build-push-voting01-qa.yaml) |
+          | 🎭 Deploy to Staging | [▶️ Run CI Build Staging](${REPO}/actions/workflows/ci-build-push-voting01-staging.yaml) |
+          | ⬆️ Promote Environment | [▶️ Run Promotion](${REPO}/actions/workflows/promote-voting01.yaml) |
+          | 🔍 Run Diagnostics | [▶️ Run Diagnostics](${REPO}/actions/workflows/diagnostics-voting01.yaml) |
+          | 📊 Refresh Landscape | [▶️ Run Landscape](${REPO}/actions/workflows/deployment-landscape-voting01.yaml) |
 
           EOF
 
