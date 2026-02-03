@@ -1,6 +1,7 @@
 # ════════════════════════════════════════════════════════════════════════════════
 # ANALYSIS TEMPLATE - QA Canary
 # HTTP health check based (Prometheus disabled - not deployed)
+# TTL cleanup: AnalysisRuns deleted after 5 min, Jobs deleted after 2 min
 # ════════════════════════════════════════════════════════════════════════════════
 apiVersion: argoproj.io/v1alpha1
 kind: AnalysisTemplate
@@ -10,6 +11,10 @@ metadata:
     app.kubernetes.io/name: voting01
     environment: qa
 spec:
+  # TTL Strategy - Clean up AnalysisRuns after completion
+  ttlStrategy:
+    secondsAfterCompletion: 300   # Delete successful AnalysisRuns after 5 minutes
+    secondsAfterFailure: 600      # Keep failed ones longer for debugging (10 min)
   args:
     - name: service-name
     - name: namespace
@@ -24,6 +29,7 @@ spec:
         job:
           spec:
             backoffLimit: 1
+            ttlSecondsAfterFinished: 120  # Delete Job pods after 2 minutes
             template:
               spec:
                 restartPolicy: Never

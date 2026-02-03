@@ -8,6 +8,7 @@ metadata:
     app.kubernetes.io/component: frontend
 spec:
   replicas: 2
+  revisionHistoryLimit: 2  # Keep only 2 old ReplicaSets to reduce pod count
   selector:
     matchLabels:
       app: vote

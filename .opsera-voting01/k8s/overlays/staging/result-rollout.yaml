@@ -8,6 +8,7 @@ metadata:
     app.kubernetes.io/component: frontend
 spec:
   replicas: 3
+  revisionHistoryLimit: 2  # Keep only 2 old ReplicaSets to reduce pod count
   selector:
     matchLabels:
       app: result
@@ -51,7 +52,7 @@ spec:
       activeService: result
       previewService: result-preview
       autoPromotionEnabled: true
-      scaleDownDelaySeconds: 60
+      scaleDownDelaySeconds: 30  # Reduced from 60 for faster cleanup
       prePromotionAnalysis:
         templates:
           - templateName: voting01-bluegreen-analysis
