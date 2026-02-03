@@ -216,20 +216,43 @@ jobs:
 
           for ENV in $ENVS; do
             NS="${{ env.APP_NAME }}-${ENV}"
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## Environment: ${ENV}" >> $GITHUB_STEP_SUMMARY
+            echo ""
+            echo "=========================================="
+            echo "Environment: ${ENV} (Namespace: $NS)"
+            echo "=========================================="
             
             if ! kubectl get namespace $NS 2>/dev/null; then
-              echo "❌ Namespace $NS not found" >> $GITHUB_STEP_SUMMARY
+              echo "❌ Namespace $NS not found"
               continue
             fi
 
+            # Show pod status
+            echo ""
+            echo "📦 Pod Status:"
+            kubectl get pods -n $NS -o wide 2>/dev/null || echo "No pods found"
+            
+            # Show rollout status
+            echo ""
+            echo "🔄 Rollout Status:"
+            kubectl get rollouts -n $NS 2>/dev/null || echo "No rollouts found"
+            
+            # Describe degraded rollouts
+            echo ""
+            echo "🔍 Rollout Details:"
             for SERVICE in vote result worker; do
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "#### $SERVICE" >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-              kubectl logs -n $NS -l app=$SERVICE --tail=50 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No logs available" >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
+              PHASE=$(kubectl get rollout $SERVICE -n $NS -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+              echo "$SERVICE: $PHASE"
+              if [ "$PHASE" = "Degraded" ]; then
+                echo "--- Describing $SERVICE rollout ---"
+                kubectl describe rollout $SERVICE -n $NS 2>/dev/null | tail -30
+              fi
+            done
+
+            # Show logs for each service
+            for SERVICE in vote result worker; do
+              echo ""
+              echo "📋 Logs for $SERVICE:"
+              kubectl logs -n $NS -l app=$SERVICE --tail=30 2>/dev/null || echo "No logs available"
             done
           done
 
