@@ -82,6 +82,7 @@ jobs:
     outputs:
       quality_gate_status: ${{ steps.quality-gate.outputs.status }}
       sonar_url: ${{ steps.quality-gate.outputs.dashboard_url }}
+      scan_failed: ${{ steps.scan.outcome == 'failure' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -100,7 +101,9 @@ jobs:
           fi
 
       - name: SonarQube Scan
+        id: scan
         if: steps.check-sonar.outputs.configured == 'true'
+        continue-on-error: true
         uses: sonarsource/sonarqube-scan-action@master
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -116,7 +119,7 @@ jobs:
 
       - name: Check Quality Gate Status
         id: quality-gate
-        if: steps.check-sonar.outputs.configured == 'true'
+        if: always() && steps.check-sonar.outputs.configured == 'true'
         run: |
           # Get quality gate status from SonarQube
           SONAR_HOST="${{ secrets.SONAR_HOST_URL }}"
@@ -602,7 +605,7 @@ jobs:
   notify-jira-quality:
     name: "📊 Jira Quality Issue"
     needs: [quality-sonarqube]
-    if: always() && needs.quality-sonarqube.result == 'failure'
+    if: always() && (needs.quality-sonarqube.outputs.scan_failed == 'true' || needs.quality-sonarqube.outputs.quality_gate_status == 'ERROR')
     runs-on: ${{ github.event.inputs.runner == 'self-hosted' && fromJSON('["self-hosted", "linux", "opsera"]') || 'ubuntu-latest' }}
     continue-on-error: true
     steps:
