@@ -63,7 +63,7 @@
         animation: pulse 1s infinite;
       }
       #error-sim-toggle {
-        background: #6c757d;
+        background: #007bff;
         color: white;
         border: none;
         padding: 10px 25px;
@@ -71,8 +71,9 @@
         cursor: pointer;
         font-size: 14px;
         transition: background 0.3s;
+        font-weight: bold;
       }
-      #error-sim-toggle:hover { background: #5a6268; }
+      #error-sim-toggle:hover { background: #0056b3; }
       #error-sim-toggle.enabled {
         background: #dc3545;
       }
@@ -159,14 +160,14 @@
         </div>
 
         <div id="version" style="margin-top: 10px; font-size: 12px; color: #666;">
-          Version: 2026.02.03-v10 | GitHub Runners | Deployed via Code-to-Cloud Enterprise
+          Version: 2026.02.03-v11 | GitHub Runners | Deployed via Code-to-Cloud Enterprise
         </div>
         <div id="hostname">
           Powered by Opsera GitOps | Pod: {{hostname}}
         </div>
       </div>
     </div>
-    <script src="http://code.jquery.com/jquery-latest.min.js" type="text/javascript"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js" type="text/javascript"></script>
     <script src="//cdnjs.cloudflare.com/ajax/libs/jquery-cookie/1.4.1/jquery.cookie.js"></script>
 
     <script>
