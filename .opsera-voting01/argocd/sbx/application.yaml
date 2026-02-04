@@ -1,0 +1,37 @@
+# ArgoCD Application for voting01-sbx (Sandbox Environment)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: voting01-sbx
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: voting01
+    environment: sbx
+    tenant: opsera
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/opsera-agentic/enterprise-voting-demo-only.git
+    targetRevision: main
+    path: .opsera-voting01/k8s/overlays/sbx
+  destination:
+    name: opsera-usw2-np
+    namespace: voting01-sbx
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
