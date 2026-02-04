@@ -643,8 +643,238 @@ Add a prominent "Promote to Active" button when rollout is paused.
 
 ---
 
-**Session Duration:** ~2 hours
-**Deployments Completed:** 3 (DEV, QA, Staging)
-**Total Pipeline Time:** ~20 minutes
-**Issues Fixed:** 9
+---
+
+## New Relic Python Agent Integration (Session Part 2)
+
+### Issue 10: Vote Service Not Registered with New Relic
+
+**Problem:** Vote service (Python/Flask) showed 0% error rate in mock New Relic dashboard even when errors were induced.
+
+**Root Cause Investigation:**
+1. CI workflow used different Dockerfile (`.opsera-voting01/Dockerfiles/Dockerfile.vote`) than source (`vote/Dockerfile`)
+2. CI Dockerfile was missing `newrelic-admin run-program` wrapper
+3. `newrelic.ini` config file was overriding environment variables
+
+**Fixes Applied:**
+
+**Fix 1: Add newrelic-admin wrapper to CI Dockerfile**
+```dockerfile
+# .opsera-voting01/Dockerfiles/Dockerfile.vote
+# WRONG - gunicorn runs directly
+CMD ["gunicorn", "app:app", "-b", "0.0.0.0:80", ...]
+
+# CORRECT - wrap with newrelic-admin
+CMD ["newrelic-admin", "run-program", "gunicorn", "app:app", "-b", "0.0.0.0:80", ...]
+```
+
+**Fix 2: Remove license_key/host from newrelic.ini**
+```ini
+# WRONG - config file overrides env vars
+[newrelic]
+license_key = OVERRIDE_VIA_ENV_VAR
+host = collector.newrelic.com
+
+# CORRECT - let env vars control these
+[newrelic]
+# license_key, app_name, host come from environment variables
+# NEW_RELIC_LICENSE_KEY, NEW_RELIC_APP_NAME, NEW_RELIC_HOST
+monitor_mode = true
+error_collector.enabled = true
+```
+
+**Learning:** Python NR agent config file values take precedence over env vars. Remove license_key, app_name, and host from newrelic.ini to let env vars work.
+
+---
+
+### Issue 11: Mock Server Rejecting Python Agent License Key
+
+**Problem:** Python NR agent connected but got "incorrect license key" error.
+
+**Root Cause:** Mock New Relic server was built for Node.js agents and didn't handle Python agent's registration protocol.
+
+**Python Agent Protocol:**
+```
+POST /agent_listener/invoke_raw_method?method=preconnect
+POST /agent_listener/invoke_raw_method?method=connect
+POST /agent_listener/invoke_raw_method?method=metric_data
+POST /agent_listener/invoke_raw_method?method=error_data
+```
+
+**Mock Server Fix Required:**
+1. Handle `/agent_listener/invoke_raw_method` endpoint
+2. Accept license key from `X-License-Key` header OR `license_key` query param
+3. Return valid responses for `preconnect`, `connect`, `metric_data`, `error_data`
+
+**Test Commands:**
+```bash
+# Test preconnect
+curl -X POST "https://mock-nr-server/agent_listener/invoke_raw_method?method=preconnect" \
+  -H "X-License-Key: mock_license_key" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+# Expected response:
+{"return_value":{"redirect_host":"mock-nr-server"}}
+
+# Test connect
+curl -X POST "https://mock-nr-server/agent_listener/invoke_raw_method?method=connect" \
+  -H "X-License-Key: mock_license_key" \
+  -d '{"app_name":"voting01-vote-dev","language":"python"}'
+
+# Expected response:
+{"return_value":{"agent_run_id":"123","collect_errors":true}}
+```
+
+**Learning:** Python and Node.js NR agents use different protocols. Mock server must implement both.
+
+---
+
+### Issue 12: NEW_RELIC_NO_CONFIG_FILE Conflict
+
+**Problem:** ConfigMap had `NEW_RELIC_NO_CONFIG_FILE: "true"` but we also had a newrelic.ini file.
+
+**Root Cause:** Mixed configuration approach - some settings in config file, some in env vars.
+
+**Fix:** Remove `NEW_RELIC_NO_CONFIG_FILE` from all ConfigMaps and use a minimal newrelic.ini:
+```yaml
+# Remove from configmap.yaml
+# NEW_RELIC_NO_CONFIG_FILE: "true"  # REMOVE THIS
+
+# Keep these in configmap:
+NEW_RELIC_HOST: "opsera-opsera-newrelic-dev.agent.opsera.dev"
+NEW_RELIC_LICENSE_KEY: (from secret)
+NEW_RELIC_APP_NAME: "voting01-vote-dev"
+```
+
+**Learning:** Choose one configuration approach: either all env vars (no config file) or config file with env var overrides. Don't mix.
+
+---
+
+### Issue 13: %(VAR)s Interpolation Not Working
+
+**Problem:** newrelic.ini used `%(NEW_RELIC_APP_NAME)s` syntax but it wasn't interpolating.
+
+**Root Cause:** Python ConfigParser's `%(VAR)s` syntax only interpolates variables defined in the config file itself, NOT environment variables.
+
+**Fix:** Don't set license_key, app_name, host in config file at all - let NR agent read them directly from env vars.
+
+```ini
+# WRONG - this doesn't work
+license_key = %(NEW_RELIC_LICENSE_KEY)s
+
+# CORRECT - just don't set it, NR agent reads env var automatically
+# (no license_key line at all)
+```
+
+**Learning:** Python NR agent automatically reads `NEW_RELIC_*` env vars. Don't try to interpolate them in config file.
+
+---
+
+## New Relic Integration Summary
+
+### Final Working Configuration
+
+**1. Dockerfile.vote:**
+```dockerfile
+CMD ["newrelic-admin", "run-program", "gunicorn", "app:app", "-b", "0.0.0.0:80", ...]
+```
+
+**2. newrelic.ini (minimal):**
+```ini
+[newrelic]
+# license_key, app_name, host from env vars
+monitor_mode = true
+log_level = info
+log_file = stdout
+distributed_tracing.enabled = true
+error_collector.enabled = true
+```
+
+**3. ConfigMap (per environment):**
+```yaml
+NEW_RELIC_HOST: "opsera-opsera-newrelic-dev.agent.opsera.dev"
+NEW_RELIC_LOG_LEVEL: "info"
+NEW_RELIC_DISTRIBUTED_TRACING_ENABLED: "true"
+```
+
+**4. Rollout env vars:**
+```yaml
+env:
+  - name: NEW_RELIC_APP_NAME
+    value: "voting01-vote-dev"  # per environment
+  - name: NEW_RELIC_ENVIRONMENT
+    value: "dev"
+envFrom:
+  - configMapRef:
+      name: voting01-config
+  - secretRef:
+      name: newrelic-license
+      optional: true
+```
+
+**5. Secret:**
+```bash
+kubectl create secret generic newrelic-license \
+  --from-literal=NEW_RELIC_LICENSE_KEY="mock_license_key_for_testing_12345678901234567890"
+```
+
+### Verification Commands
+
+```bash
+# Test agent connection from pod
+kubectl exec -n voting01-dev $POD -- python3 -c "
+import newrelic.agent
+newrelic.agent.initialize('/usr/local/app/newrelic.ini')
+app = newrelic.agent.application()
+app.activate(timeout=15.0)
+print('Agent Active:', app.active)
+"
+
+# Expected output:
+# Connected to Mock New Relic (python agent)
+# Agent Active: True
+```
+
+---
+
+## New Rules to Add (from NR Integration)
+
+**RULE 46: Python NR Agent Config Priority**
+```
+Python New Relic agent reads configuration in order: config file → env vars.
+Config file values take precedence. To let env vars control license_key, app_name,
+and host, do NOT set them in newrelic.ini.
+```
+
+**RULE 47: newrelic-admin Wrapper Required**
+```
+For Python apps with New Relic, the Dockerfile CMD must use:
+CMD ["newrelic-admin", "run-program", "actual-command", ...]
+The wrapper initializes the agent before the app starts.
+```
+
+**RULE 48: Mock NR Server Protocol Support**
+```
+Mock New Relic server must implement both Node.js and Python agent protocols:
+- Node.js: Browser-style endpoints
+- Python: /agent_listener/invoke_raw_method with method query param
+Both use X-License-Key header for authentication.
+```
+
+**RULE 49: CI Dockerfile Location**
+```
+Check which Dockerfile the CI workflow uses. Often it's NOT the source Dockerfile:
+- Source: vote/Dockerfile
+- CI: .opsera-voting01/Dockerfiles/Dockerfile.vote
+Always update the CI Dockerfile, not just the source one.
+```
+
+---
+
+**Session Duration:** ~4 hours (Part 1: 2h, Part 2: 2h)
+**Deployments Completed:** 5+ (DEV multiple times for NR testing)
+**Total Pipeline Time:** ~20 minutes per full deploy
+**Issues Fixed:** 13
 **New Features:** 4
+**New Rules:** 8 (RULE 42-49)
