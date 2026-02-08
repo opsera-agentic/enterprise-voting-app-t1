@@ -1,0 +1,85 @@
+# Quick debug for voting01-dev10
+name: "Quick Debug (voting01-dev10)"
+
+on:
+  workflow_dispatch:
+
+env:
+  APP_NAME: voting01
+  ENVIRONMENT: dev10
+  AWS_REGION: us-west-2
+  SPOKE_CLUSTER: opsera-usw2-np
+  HUB_CLUSTER: argocd-usw2
+
+jobs:
+  debug:
+    name: "Debug dev10"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Pod Status
+        run: |
+          aws eks update-kubeconfig --name ${{ env.SPOKE_CLUSTER }} --region ${{ env.AWS_REGION }}
+          NS="${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}"
+          echo "### All Resources in ${NS}" | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get all -n $NS 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Pod Logs - Vote
+        run: |
+          NS="${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}"
+          echo "### Vote Pod Logs (last 50)" | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl logs -n $NS -l app=vote --tail=50 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Pod Logs - Worker
+        run: |
+          NS="${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}"
+          echo "### Worker Pod Logs (last 50)" | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl logs -n $NS -l app=worker --tail=50 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Pod Logs - Result
+        run: |
+          NS="${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}"
+          echo "### Result Pod Logs (last 50)" | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl logs -n $NS -l app=result --tail=50 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: ConfigMap Check
+        run: |
+          NS="${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}"
+          echo "### ConfigMap" | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get configmap voting01-config -n $NS -o yaml 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: IRSA Verification
+        run: |
+          NS="${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}"
+          echo "### IRSA Env Vars" | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          for POD in $(kubectl get pods -n $NS -o name 2>/dev/null); do
+            echo "--- $POD ---"
+            kubectl exec $POD -n $NS -- env 2>&1 | grep -E "(AWS_ROLE|REDIS|DATABASE|ENVIRONMENT)" || kubectl describe $POD -n $NS 2>&1 | grep -E "(AWS_ROLE_ARN|REDIS|DATABASE)" || true
+            echo ""
+          done | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Events
+        run: |
+          NS="${{ env.APP_NAME }}-${{ env.ENVIRONMENT }}"
+          echo "### Recent Events" | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get events -n $NS --sort-by='.lastTimestamp' 2>&1 | tail -20 | tee -a $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
